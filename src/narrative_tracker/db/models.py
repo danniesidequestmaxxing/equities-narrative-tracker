@@ -185,3 +185,77 @@ class AccountScore(Base):
     max_closed_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+
+
+# --- M3: instruments + recommendations ------------------------------------
+
+
+class Instrument(Base):
+    __tablename__ = "instruments"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    symbol: Mapped[str] = mapped_column(String(24), unique=True, index=True)
+    asset_class: Mapped[str] = mapped_column(String(12), default="equity")
+    name: Mapped[str] = mapped_column(String(128), default="")
+    tradeable: Mapped[bool] = mapped_column(Boolean, default=True)
+    halted: Mapped[bool] = mapped_column(Boolean, default=False)
+
+
+class Recommendation(Base):
+    __tablename__ = "recommendations"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    call_id: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    symbol: Mapped[str] = mapped_column(String(24), index=True)
+    asset_class: Mapped[str] = mapped_column(String(12), default="equity")
+    direction: Mapped[str] = mapped_column(String(8))
+    entry: Mapped[float] = mapped_column(Float)
+    stop: Mapped[float] = mapped_column(Float)
+    targets: Mapped[dict] = mapped_column(JSON, default=dict)
+    size_hint: Mapped[str] = mapped_column(String(24), default="")
+    horizon: Mapped[str] = mapped_column(String(32), default="")
+    confidence: Mapped[float] = mapped_column(Float, default=0.0)
+    narrative: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    state: Mapped[str] = mapped_column(String(12), default="candidate")
+    suppress_reason: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    credibility_at_issuance: Mapped[float] = mapped_column(Float, default=0.0)
+    issued_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+
+class RecommendationSource(Base):
+    __tablename__ = "recommendation_sources"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    recommendation_id: Mapped[int] = mapped_column(ForeignKey("recommendations.id"), index=True)
+    account_id: Mapped[int | None] = mapped_column(ForeignKey("accounts.id"), nullable=True)
+    handle: Mapped[str] = mapped_column(String(64), default="")
+    attribution_weight: Mapped[float] = mapped_column(Float, default=0.0)
+
+
+class GateEvaluation(Base):
+    __tablename__ = "gate_evaluations"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    recommendation_id: Mapped[int | None] = mapped_column(
+        ForeignKey("recommendations.id"), nullable=True, index=True
+    )
+    symbol: Mapped[str] = mapped_column(String(24), index=True)
+    gate_name: Mapped[str] = mapped_column(String(32))
+    passed: Mapped[bool] = mapped_column(Boolean)
+    measured: Mapped[dict] = mapped_column(JSON, default=dict)
+    evaluated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+
+class Outcome(Base):
+    __tablename__ = "outcomes"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    recommendation_id: Mapped[int] = mapped_column(
+        ForeignKey("recommendations.id"), unique=True, index=True
+    )
+    close_reason: Mapped[str] = mapped_column(String(16))
+    realized_r: Mapped[float] = mapped_column(Float)
+    mfe_r: Mapped[float] = mapped_column(Float, default=0.0)
+    mae_r: Mapped[float] = mapped_column(Float, default=0.0)
+    benchmark_r: Mapped[float | None] = mapped_column(Float, nullable=True)
+    closed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)

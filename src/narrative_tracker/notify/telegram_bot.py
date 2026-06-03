@@ -20,12 +20,44 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from ..db import idempotency
 from ..ingest.provider import RawPost
+from ..schemas.call import Direction, TradeCall
 from ..schemas.mention import Mention, OptionDetail, Stance
 from .escaping import md, md_code, md_url
 
 log = logging.getLogger(__name__)
 
 _STANCE_EMOJI = {Stance.BULLISH: "\U0001f7e2", Stance.BEARISH: "\U0001f534"}  # 🟢 🔴
+_DIR_EMOJI = {Direction.LONG: "\U0001f7e2", Direction.SHORT: "\U0001f534"}
+
+
+def build_call(call: TradeCall) -> tuple[str, str]:
+    """Return ``(markdown_v2, plain)`` for an explicit trade call."""
+    de = _DIR_EMOJI.get(call.direction, "\U0001f7e1")
+    t2 = f" · `{md_code('T2 ' + str(call.targets.t2))}`" if call.targets.t2 else ""
+    narr = f"*Narrative* {md(call.narrative)}\n" if call.narrative else ""
+    accts = ", ".join("@" + a for a in call.source_accounts) if call.source_accounts else "—"
+    tv = tradingview_url(call.symbol)
+    mdv2 = (
+        f"🎯 *CALL* · *{md('$' + call.symbol)}* · {de} *{md(call.direction.value.upper())}*\n"
+        f"confidence `{md_code(f'{call.confidence:.2f}')}` · R/R `{md_code(f'{call.rr}:1')}`\n"
+        f"*Entry* `{md_code(call.entry)}`\n"
+        f"*Stop* `{md_code(call.stop)}`\n"
+        f"*Targets* `{md_code('T1 ' + str(call.targets.t1))}`{t2}\n"
+        f"*Size* `{md_code(call.size_hint)}` · *Horizon* `{md_code(call.horizon)}`\n"
+        f"{narr}"
+        f"*Accounts* {md(accts)}\n"
+        f"[\U0001f4c8 TradingView]({md_url(tv)})\n"
+        f"\n"
+        f"_{md(call.disclaimer)}_\n"
+        f"`{md_code(call.call_id)}`"
+    )
+    plain = (
+        f"[CALL] ${call.symbol} {call.direction.value.upper()} conf {call.confidence:.2f} R/R {call.rr}:1\n"
+        f"Entry {call.entry} | Stop {call.stop} | T1 {call.targets.t1}\n"
+        f"Size {call.size_hint} | Horizon {call.horizon}\n"
+        f"Accounts: {accts}\n{tv}\n{call.disclaimer}\n{call.call_id}"
+    )
+    return mdv2, plain
 
 
 class BotProtocol(Protocol):
@@ -115,6 +147,21 @@ class AlertNotifier:
         message_id = await self._safe_send(mdv2, plain)
         await idempotency.mark_sent(
             self._sf, idempotency_key=key, telegram_message_id=message_id
+        )
+        return True
+
+    async def broadcast_call(self, call: TradeCall) -> bool:
+        """Auto-broadcast a trade call (idempotent on call_id). Returns True if
+        a message was actually sent, False if deduped."""
+        claimed = await idempotency.claim_send(
+            self._sf, idempotency_key=call.call_id, chat_id=self._chat_id
+        )
+        if not claimed:
+            return False
+        mdv2, plain = build_call(call)
+        message_id = await self._safe_send(mdv2, plain)
+        await idempotency.mark_sent(
+            self._sf, idempotency_key=call.call_id, telegram_message_id=message_id
         )
         return True
 
