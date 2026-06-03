@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+from datetime import datetime
+
 from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from .models import Account, AuditLog, Post, TickerMention
+from .models import Account, AccountScore, AuditLog, Post, TickerMention
 
 
 async def get_or_create_account(
@@ -92,3 +94,50 @@ async def record_audit(
     async with session_factory() as session:
         session.add(AuditLog(event_type=event_type, payload=payload))
         await session.commit()
+
+
+async def insert_account_score(
+    session_factory: async_sessionmaker[AsyncSession],
+    *,
+    account_id: int,
+    as_of: datetime,
+    decayed_score: float,
+    sample_size: int,
+    accuracy: float = 0.0,
+    max_closed_at: datetime | None = None,
+) -> None:
+    """Append a point-in-time credibility row (INV-3)."""
+    async with session_factory() as session:
+        session.add(
+            AccountScore(
+                account_id=account_id,
+                as_of=as_of,
+                accuracy=accuracy,
+                sample_size=sample_size,
+                decayed_score=decayed_score,
+                max_closed_at=max_closed_at,
+            )
+        )
+        await session.commit()
+
+
+async def get_credibility(
+    session_factory: async_sessionmaker[AsyncSession],
+    *,
+    account_id: int,
+    as_of: datetime,
+) -> float:
+    """Latest credibility as-of ``as_of``; falls back to the tier prior."""
+    from ..analyze.sentiment import credibility_prior
+
+    async with session_factory() as session:
+        row = await session.scalar(
+            select(AccountScore)
+            .where(AccountScore.account_id == account_id, AccountScore.as_of <= as_of)
+            .order_by(AccountScore.as_of.desc())
+            .limit(1)
+        )
+        if row is not None:
+            return row.decayed_score
+        tier = await session.scalar(select(Account.tier).where(Account.id == account_id))
+    return credibility_prior(tier or "COLD")
