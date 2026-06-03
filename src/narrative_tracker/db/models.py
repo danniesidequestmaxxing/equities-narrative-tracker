@@ -127,3 +127,61 @@ class AuditLog(Base):
     event_type: Mapped[str] = mapped_column(String(48), index=True)
     payload: Mapped[dict] = mapped_column(JSON, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+
+# --- M2: narratives + sentiment -------------------------------------------
+
+
+class Narrative(Base):
+    """A market narrative (theme). Identity is stable; momentum evolves."""
+
+    __tablename__ = "narratives"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    label: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    momentum_state: Mapped[str] = mapped_column(String(12), default="rising")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+
+class NarrativeMember(Base):
+    """Append-only (narrative, instrument, weight) as-of a time (INV-2)."""
+
+    __tablename__ = "narrative_members"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    narrative_id: Mapped[int] = mapped_column(ForeignKey("narratives.id"), index=True)
+    symbol: Mapped[str] = mapped_column(String(24), index=True)
+    weight: Mapped[float] = mapped_column(Float, default=0.0)
+    as_of: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+
+class NarrativeSnapshot(Base):
+    """Point-in-time narrative state frozen for reproducibility (INV-2)."""
+
+    __tablename__ = "narrative_snapshots"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    narrative_id: Mapped[int] = mapped_column(ForeignKey("narratives.id"), index=True)
+    as_of: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    momentum_state: Mapped[str] = mapped_column(String(12))
+    members: Mapped[dict] = mapped_column(JSON, default=dict)
+
+
+class AccountScore(Base):
+    """Point-in-time credibility for an account (closure-time correct, INV-3).
+
+    Populated by the M4 feedback loop. Before any outcomes exist, M2 falls back
+    to a tier-based prior.
+    """
+
+    __tablename__ = "account_scores"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    account_id: Mapped[int] = mapped_column(ForeignKey("accounts.id"), index=True)
+    as_of: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    accuracy: Mapped[float] = mapped_column(Float, default=0.0)
+    sample_size: Mapped[int] = mapped_column(default=0)
+    decayed_score: Mapped[float] = mapped_column(Float, default=0.0)
+    max_closed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
