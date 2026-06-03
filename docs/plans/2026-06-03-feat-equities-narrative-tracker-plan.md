@@ -403,6 +403,7 @@ These six invariants are cheaper to enforce as data-model + contract decisions n
 - Mock files: `extract/ner_llm.py`, `extract/vision.py`, `extract/stance.py`, `extract/symbology.py`, `ingest/dedupe.py`.
 
 #### Phase M2 — Narrative + sentiment layer (the real product)
+> **✅ Shipped 2026-06-03** — credibility-weighted EWMA sentiment (N_eff guard), contrarian-extreme + coordinated-pump detection, seed-theme narratives with dual-EWMA momentum, derived-analysis digest.
 - Embedding-based clustering of mentions into **narratives**; momentum state (rising/peaking/fading) from mention velocity/acceleration.
 - Per-ticker aggregate sentiment + **contrarian extreme** detection (euphoria = caution).
 - Credibility-weighted mention tallies (uses `account_scores` as-of).
@@ -410,6 +411,7 @@ These six invariants are cheaper to enforce as data-model + contract decisions n
 - Mock files: `analyze/narratives.py`, `analyze/sentiment.py`, `analyze/digest.py`.
 
 #### Phase M3 — Deep-dive + explicit calls (the highest-stakes phase)
+> **✅ Shipped 2026-06-03** — market-data enrichment, pure-Python technicals, the 14-gate fail-closed chain (incl. Provenance + Numeric-sanity), ranking + correlation cap, auto-broadcast call template with mandatory disclaimer.
 - Enrich top 5–10 tickers: price/vol/liquidity, **IV rank** (Polygon-computed or ORATS), catalysts, fundamentals.
 - TA via `pandas-ta-classic` (RSI/MACD/Supertrend/OBV + DIY S/R); composite ranking.
 - **14-gate registry + fail-closed runner** (includes 🆕 Provenance + Numeric-sanity); `pandas-market-calendars` for the session gate; every evaluation logged to `gate_evaluations`.
@@ -418,6 +420,7 @@ These six invariants are cheaper to enforce as data-model + contract decisions n
 - Mock files: `enrich/market_data.py`, `analyze/technicals.py`, `recommend/ranker.py`, `recommend/gates/` (registry), `recommend/gate_runner.py`, `recommend/call_builder.py`, `schemas/targets.py`.
 
 #### Phase M4 — Feedback loop (the compounding moat)
+> **✅ Shipped 2026-06-03** — path-dependent scorer with 12 exact-R golden fixtures; pure-recomputation credibility with the closure-time invariant (regression-tested) + signed-alignment attribution; account_scores persistence.
 - Outcome scorer as a **tested, path-dependent bar-loop** (INV-5) over **as-of-issuance unadjusted `market_bars` + adjustment ledger**; R-multiple, MFE/MAE, **benchmark-relative** (SPY/BTC). Golden fixtures: gap-through-stop, same-bar stop+target, split, dividend, expiry-at-mark, delisting.
 - "Closed" definition with **stop-first intrabar tie-break**, horizon/expiry, gap-fill, survivorship-safe population.
 - Credibility as **pure recomputation from closed outcomes** honoring the **closure-time invariant** (INV-3) + its regression test; **multi-account attribution function** (credibility-weighted split) applied identically in scoring and ranking.
@@ -426,6 +429,7 @@ These six invariants are cheaper to enforce as data-model + contract decisions n
 - Mock files: `score/outcome.py` (+ `score/fixtures/`), `score/attribution.py`, `score/credibility.py`, `score/benchmark.py`, `db/adjustments.py`.
 
 #### Phase M5 — Hardening & degraded modes
+> **✅ Shipped 2026-06-03** — Postgres-authoritative kill switch + two-mode pause, idempotent budget ledger, fail-closed degraded-mode posture, recovery freshness gate, audited admin service. End-to-end demo (`scripts/demo_full.py`) runs the full loop.
 - **Dependency × stage degraded-mode matrix** (fail-safe: suppress calls when audit/fresh-price/LLM unavailable).
 - Budget-exhaustion behavior; **Redis-loss ⇒ fail-closed** (no re-alert storm; killswitch reads engaged); Postgres-loss (halt broadcast; the ingest buffer prevents post loss); Telegram retry/poison handling; recovery-replay through freshness + idempotency gates.
 - Admin surface: authn'd `/admin` + aiogram commands (add/remove/filter source with **effect-time semantics**, cadence change, **two-mode pause**, **kill switch**), all audited.

@@ -259,3 +259,28 @@ class Outcome(Base):
     mae_r: Mapped[float] = mapped_column(Float, default=0.0)
     benchmark_r: Mapped[float | None] = mapped_column(Float, nullable=True)
     closed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+
+# --- M5: control plane (kill switch / pause / budget) ----------------------
+
+
+class SystemFlag(Base):
+    """Postgres-authoritative control flags (killswitch, pause mode)."""
+
+    __tablename__ = "system_flags"
+
+    key: Mapped[str] = mapped_column(String(32), primary_key=True)
+    value: Mapped[str] = mapped_column(String(32))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+
+class BudgetLedger(Base):
+    """Durable spend ledger; ``ref`` is the idempotent charge key."""
+
+    __tablename__ = "budget_ledger"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    bucket: Mapped[str] = mapped_column(String(16), index=True)  # llm|x_api|market_data
+    amount: Mapped[float] = mapped_column(Float)
+    ref: Mapped[str] = mapped_column(String(128), unique=True)
+    charged_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
