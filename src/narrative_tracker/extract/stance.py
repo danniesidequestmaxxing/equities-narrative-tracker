@@ -14,11 +14,16 @@ prompt from docs/design/04; it conforms to the same ``StanceClassifier`` protoco
 
 from __future__ import annotations
 
+import logging
 import re
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Awaitable, Callable, Protocol
+
+from pydantic import BaseModel, Field
 
 from ..schemas.mention import Stance
+
+log = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -29,7 +34,7 @@ class StanceResult:
 
 
 class StanceClassifier(Protocol):
-    def classify(self, text: str, symbol: str | None = None) -> StanceResult: ...
+    async def classify(self, text: str, symbol: str | None = None) -> StanceResult: ...
 
 
 _BULLISH = {
@@ -63,9 +68,9 @@ def _flip(stance: Stance) -> Stance:
 
 
 class RuleBasedStanceClassifier:
-    """Deterministic stance + negation detection."""
+    """Deterministic stance + negation detection (also the fail-safe fallback)."""
 
-    def classify(self, text: str, symbol: str | None = None) -> StanceResult:
+    async def classify(self, text: str, symbol: str | None = None) -> StanceResult:
         low = (text or "").lower()
         if low.strip().endswith("?"):
             return StanceResult(Stance.NEUTRAL, False, 0.8)
@@ -103,13 +108,87 @@ class RuleBasedStanceClassifier:
         return StanceResult(base, neg_flag, round(strength, 2))
 
 
-def build_llm_stance_classifier(model: str) -> StanceClassifier:  # pragma: no cover
-    """Construct the LLM-backed classifier (lazy; part of the ``prod`` extra).
+STANCE_SYSTEM_PROMPT = """\
+You label the AUTHOR'S directional stance toward the tickers in one X/Twitter post.
+Stance is about how the author is positioned / what they want the price to do — NOT
+the surface polarity of individual words.
 
-    Falls back to the rule-based classifier if the LLM client is unavailable —
-    the fail-safe degraded mode.
-    """
-    raise NotImplementedError(
-        "LLM stance classifier is wired in a later milestone; "
-        "M1 uses RuleBasedStanceClassifier."
-    )
+Rules:
+1. NEGATION: detect negation and its scope. "$X is NOT a buy" is bearish/neutral,
+   never bullish. Set negation=true and explain in one phrase.
+2. SARCASM/IRONY: "imagine being long $X here", "great job buying the top", 💀, 🤡
+   usually INVERT the literal meaning and LOWER confidence.
+3. MOMENTUM FRAMING IS BULLISH: "up ~50%", "next trillion dollar stock", "up 2x",
+   "ripping", "parabolic", "ATH" express a bullish view even without the word "buy".
+4. Pure questions or news with no opinion => neutral.
+5. If you genuinely cannot tell => unclear. Do not guess high confidence.
+Return calibrated confidence in [0,1]."""
+
+
+class StanceLabel(BaseModel):
+    """Schema the LLM is constrained to fill (provider-native structured output)."""
+
+    stance: Stance
+    negation: bool = False
+    confidence: float = Field(ge=0, le=1)
+
+
+class LlmStanceClassifier:
+    """LLM-backed stance. ``infer`` is an async callable (text -> StanceLabel); the
+    production builder wires it to ``instructor`` + a provider, tests inject a fake."""
+
+    def __init__(self, *, infer: Callable[[str], Awaitable[StanceLabel]]) -> None:
+        self._infer = infer
+
+    async def classify(self, text: str, symbol: str | None = None) -> StanceResult:
+        label = await self._infer(text)
+        return StanceResult(
+            stance=label.stance,
+            negation_flag=bool(label.negation),
+            stance_confidence=float(label.confidence),
+        )
+
+
+class FallbackStanceClassifier:
+    """Try the primary (LLM); on ANY failure (no key, API error, over budget,
+    validation error) fall back to the deterministic classifier. This is the
+    plan's fail-safe degraded mode for stance."""
+
+    def __init__(self, primary: StanceClassifier, fallback: StanceClassifier) -> None:
+        self._primary = primary
+        self._fallback = fallback
+
+    async def classify(self, text: str, symbol: str | None = None) -> StanceResult:
+        try:
+            return await self._primary.classify(text, symbol)
+        except Exception as exc:  # noqa: BLE001 - degrade, never break extraction
+            log.warning("LLM stance failed (%s); falling back to rule-based", exc)
+            return await self._fallback.classify(text, symbol)
+
+
+def build_llm_infer(model: str) -> Callable[[str], Awaitable[StanceLabel]]:  # pragma: no cover
+    """Wire an async LLM inference callable via instructor (part of the ``prod`` extra)."""
+
+    async def infer(text: str) -> StanceLabel:
+        import instructor  # lazy
+
+        client = instructor.from_provider(model, async_client=True)
+        return await client.chat.completions.create(
+            response_model=StanceLabel,
+            max_retries=2,
+            messages=[
+                {"role": "system", "content": STANCE_SYSTEM_PROMPT},
+                {"role": "user", "content": text},
+            ],
+        )
+
+    return infer
+
+
+def build_stance_classifier(*, model: str | None = None) -> StanceClassifier:
+    """Factory: LLM (+ rule-based fallback) when a model is configured, else
+    the deterministic rule-based classifier."""
+    rule = RuleBasedStanceClassifier()
+    if not model:
+        return rule
+    return FallbackStanceClassifier(LlmStanceClassifier(infer=build_llm_infer(model)), rule)

@@ -119,7 +119,7 @@ class ExtractionPipeline:
 
         # S3 — stance (one post-level read applied to text-derived mentions;
         # vision mentions keep any stance they carried).
-        result = self._stance.classify(text)
+        result = await self._stance.classify(text)
         for m in mentions:
             if m.resolution_method is ResolutionMethod.VISION_OCR:
                 continue

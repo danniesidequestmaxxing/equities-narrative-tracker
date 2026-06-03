@@ -211,10 +211,15 @@ async def main() -> None:  # pragma: no cover - prod entrypoint
         session_factory=session_factory,
         trading_chat_id=settings.telegram_trading_chat_id,  # type: ignore[arg-type]
     )
+    # LLM stance when configured; deterministic rule-based otherwise (fail-safe).
+    from .extract.stance import build_stance_classifier
+
+    pipeline = ExtractionPipeline(stance=build_stance_classifier(model=settings.llm_model))
     worker = Worker(
         provider=provider,
         notifier=notifier,
         session_factory=session_factory,
+        pipeline=pipeline,
         heartbeat_url=settings.healthchecks_url,
     )
     await worker.run()

@@ -1,0 +1,241 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Narrative Tracker — UX (Telegram)</title>
+<style>
+  :root{
+    --bg:#0e1621; --panel:#17212b; --bubble:#1e2c3a; --bubble2:#17212b;
+    --text:#ffffff; --muted:#7d8e9e; --link:#6ab3f3; --code:rgba(255,255,255,.07);
+    --green:#4dcb5d; --red:#f1655a; --yellow:#f0b232; --btn:#213444; --btnText:#6ab3f3;
+    --send:#2b5278;
+  }
+  *{box-sizing:border-box}
+  body{
+    margin:0; background:#05080c; color:var(--text);
+    font-family:-apple-system,"Segoe UI",Roboto,Helvetica,Arial,"Apple Color Emoji","Segoe UI Emoji",sans-serif;
+    padding:34px 28px 50px;
+  }
+  h1{font-size:21px;margin:0 0 4px;font-weight:650;letter-spacing:.2px}
+  .sub{color:#8aa0b2;font-size:13.5px;margin:0 0 26px;max-width:1100px;line-height:1.5}
+  .sub code{background:#1b2733;padding:1px 6px;border-radius:5px;font-size:12.5px}
+  .row{display:flex;gap:30px;flex-wrap:wrap;align-items:flex-start}
+  .col-label{font-size:12px;text-transform:uppercase;letter-spacing:.7px;color:#6f8497;margin:0 0 10px 6px;font-weight:600}
+
+  .phone{
+    width:340px;background:var(--bg);border-radius:30px;overflow:hidden;
+    box-shadow:0 18px 50px rgba(0,0,0,.55),0 0 0 9px #0a0e13,0 0 0 11px #1c2630;
+    display:flex;flex-direction:column;height:900px;
+  }
+  .hdr{
+    background:var(--panel);padding:12px 14px;display:flex;align-items:center;gap:11px;
+    border-bottom:1px solid #0c141d;flex:0 0 auto;
+  }
+  .ava{width:40px;height:40px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:19px;
+    background:linear-gradient(135deg,#2aabee,#1e96c8)}
+  .ava.ops{background:linear-gradient(135deg,#8e7cff,#6c5ce7)}
+  .ava.admin{background:linear-gradient(135deg,#43c463,#2bb24a)}
+  .hdr .nm{font-size:15px;font-weight:600;line-height:1.2}
+  .hdr .st{font-size:12px;color:var(--muted)}
+  .feed{
+    flex:1 1 auto;overflow:hidden;padding:14px 12px 8px;display:flex;flex-direction:column;gap:9px;
+    background:
+      radial-gradient(circle at 20% 12%,rgba(43,82,120,.18),transparent 40%),
+      radial-gradient(circle at 85% 75%,rgba(43,82,120,.12),transparent 45%),
+      var(--bg);
+  }
+  .msg{
+    align-self:flex-start;max-width:90%;background:var(--bubble);border-radius:13px 13px 13px 5px;
+    padding:9px 11px 7px;font-size:13.6px;line-height:1.5;position:relative;box-shadow:0 1px 1px rgba(0,0,0,.25);
+  }
+  .msg.full{max-width:97%}
+  .msg .t{font-size:10.5px;color:var(--muted);text-align:right;margin-top:3px}
+  b{font-weight:680}
+  i{color:#b9c7d3;font-style:italic}
+  .mut{color:var(--muted)}
+  code{background:var(--code);padding:1px 5px;border-radius:5px;font-family:"SF Mono",ui-monospace,Menlo,monospace;font-size:12.3px}
+  a{color:var(--link);text-decoration:none}
+  .green{color:var(--green)} .red{color:var(--red)} .yellow{color:var(--yellow)}
+  hr{border:none;border-top:1px solid rgba(255,255,255,.07);margin:7px 0}
+  .disc{color:#6f8497;font-style:italic;font-size:11.7px}
+  .kbd{display:flex;gap:6px;margin-top:8px}
+  .kbd button{
+    flex:1;background:var(--btn);color:var(--btnText);border:none;border-radius:8px;padding:8px;
+    font-size:12.5px;font-weight:600;font-family:inherit;cursor:default;
+  }
+  .views{font-size:10.5px;color:var(--muted)}
+  /* outgoing (admin typing) */
+  .out{align-self:flex-end;background:var(--send);border-radius:13px 13px 5px 13px;color:#e9f3fc}
+  .composer{flex:0 0 auto;background:var(--panel);padding:9px 12px;display:flex;align-items:center;gap:10px;border-top:1px solid #0c141d}
+  .composer .inp{flex:1;background:#0e1621;border-radius:18px;padding:8px 13px;color:#6f8497;font-size:13px}
+  .pin{background:rgba(43,82,120,.25);border-left:3px solid #4da3e0;border-radius:6px;padding:4px 9px;font-size:11.5px;color:#bcd2e2;margin-bottom:3px}
+  .legend{margin-top:30px;color:#7e93a4;font-size:12.5px;max-width:1100px;line-height:1.65}
+  .legend b{color:#aab9c6}
+</style>
+</head>
+<body>
+  <h1>Narrative Tracker — what the user actually sees</h1>
+  <p class="sub">There is no web app: the product surface is <b>Telegram</b>. These bubbles are the real output of the code
+    (<code>build_alert</code>, <code>build_digest</code>, <code>build_call</code>, admin commands) rendered as they'd appear in the app.
+    Three surfaces: the <b>trading channel</b> (what the group sees), the <b>ops channel</b> (private health), and your <b>admin DM</b>.</p>
+
+  <div class="row">
+
+    <!-- ───────────── TRADING CHANNEL ───────────── -->
+    <div>
+      <div class="col-label">① Trading channel — the group</div>
+      <div class="phone">
+        <div class="hdr">
+          <div class="ava">📈</div>
+          <div><div class="nm">Narrative Tracker — Signals</div><div class="st">5 members · channel</div></div>
+        </div>
+        <div class="feed">
+
+          <!-- real-time alert -->
+          <div class="msg">
+            ⚡ <b>$NVDA</b> · <span class="green">🟢 bullish</span> · equity<br>
+            <a>@whale_trader</a> posted on <code>$NVDA</code><br>
+            <span class="mut">14:23 ET · 30s ago</span><br>
+            <a>📈 Chart</a> · <a>#NVDA</a><br>
+            <span class="disc">Derived signal · not financial advice</span>
+            <div class="t">14:23 👁 5</div>
+          </div>
+
+          <!-- digest -->
+          <div class="msg full">
+            📊 <b>Daily Narrative Digest</b> — 03 Jun 2026<br>
+            <i>Derived from 1,204 tracked posts across 87 accounts</i>
+            <hr>
+            <b>Top narratives</b><br>
+            1. <b>AI infrastructure</b> — <span class="green">🟢 rising</span><br>
+            2. <b>GLP-1 / obesity</b> — <span class="yellow">🟡 peaking</span><br>
+            3. <b>Nuclear / uranium</b> — <span class="red">🔴 fading</span>
+            <hr>
+            <b>Credibility-weighted hot tickers</b><br>
+            🟢 <code>$NVDA</code> · S +0.42 · n_eff 8.1<br>
+            🟢 <code>$AVGO</code> · S +0.31 · n_eff 5.4<br>
+            🟡 <code>$LLY</code> · S +0.12 · n_eff 4.0 &nbsp;⚠️ <span class="yellow">euphoria</span><br>
+            🔴 <code>$INTC</code> · S −0.28 · n_eff 3.6
+            <hr>
+            <span class="disc">Analysis only · derived metrics · not financial advice</span>
+            <div class="t">16:30 👁 5</div>
+          </div>
+
+          <!-- explicit call -->
+          <div class="msg full">
+            🎯 <b>CALL</b> · <b>$NVDA</b> · <span class="green">🟢 <b>LONG</b></span><br>
+            confidence <code>0.85</code> · R/R <code>2.0:1</code><br>
+            <b>Entry</b> <code>150.00</code><br>
+            <b>Stop</b> <code>145.50</code><br>
+            <b>Targets</b> <code>T1 162.00</code><br>
+            <b>Size</b> <code>1.0% NAV</code> · <b>Horizon</b> <code>swing · 1-3w</code><br>
+            <b>Narrative</b> AI infrastructure<br>
+            <b>Accounts</b> <a>@whale_trader</a>, <a>@macro_mike</a>, <a>@value_val</a><br>
+            <a>📈 Open in TradingView</a><br>
+            <span class="disc">NOT FINANCIAL ADVICE. For information only.</span><br>
+            <code>CALL-2026-06-03-NVDA-001</code>
+            <div class="t">16:31 👁 5</div>
+          </div>
+
+          <!-- retraction (reply) -->
+          <div class="msg" style="border-left:3px solid var(--red)">
+            ↩️ <b>INVALIDATED</b> · <b>$NVDA</b> · was <span class="green">🟢 LONG</span><br>
+            Reason: <b>stop hit at 145.50</b><br>
+            <span class="mut">This supersedes the call above. Do not action it.</span><br>
+            <code>CALL-2026-06-03-NVDA-001</code> → closed
+            <div class="t">Jun 5, 11:04 👁 5</div>
+          </div>
+
+        </div>
+      </div>
+    </div>
+
+    <!-- ───────────── OPS CHANNEL ───────────── -->
+    <div>
+      <div class="col-label">② Ops channel — private health</div>
+      <div class="phone">
+        <div class="hdr">
+          <div class="ava ops">🛠</div>
+          <div><div class="nm">Narrative Tracker — Ops</div><div class="st">1 member · channel</div></div>
+        </div>
+        <div class="feed">
+          <div class="msg">
+            🟢 <b>Feed healthy</b> · heartbeat OK<br>
+            <span class="mut">last ingest 3s ago · 1,204 posts today</span>
+            <div class="t">16:28</div>
+          </div>
+          <div class="msg">
+            💸 <b>Budget</b> · LLM <code>$78 / $100</code> this month <span class="mut">(78%)</span><br>
+            x_api <code>$149</code> · market_data <code>$0</code>
+            <div class="t">16:30</div>
+          </div>
+          <div class="msg" style="border-left:3px solid var(--yellow)">
+            ⚠️ <b>Coordinated-pump suppressed</b><br>
+            <code>$ZZZ</code> · pump score <b>0.91</b> · 18 low-cred accts / 30m<br>
+            <span class="mut">call NOT broadcast (gate: pump)</span>
+            <div class="t">16:31</div>
+          </div>
+          <div class="msg" style="border-left:3px solid var(--red)">
+            🔴 <b>DEAD-MAN'S SWITCH</b><br>
+            no posts ingested in 4m — primary feed may be down<br>
+            <span class="mut">failing over to SocialData…</span>
+            <div class="t">16:44</div>
+          </div>
+          <div class="msg">
+            🟢 <b>Recovered</b> · fallback feed live · backfilled 12 posts<br>
+            <span class="mut">stale posts suppressed (freshness gate)</span>
+            <div class="t">16:45</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ───────────── ADMIN DM ───────────── -->
+    <div>
+      <div class="col-label">③ Admin DM — you control it</div>
+      <div class="phone">
+        <div class="hdr">
+          <div class="ava admin">🤖</div>
+          <div><div class="nm">NarrativeTracker Bot</div><div class="st">bot · admin only</div></div>
+        </div>
+        <div class="feed">
+          <div class="out msg">/addsource @newwhale tier=HOT<div class="t">15:02</div></div>
+          <div class="msg">✅ Added <a>@newwhale</a> (HOT) — now watching 6 accounts.<div class="t">15:02</div></div>
+
+          <div class="out msg">/sources<div class="t">15:03</div></div>
+          <div class="msg">
+            <b>Watched accounts (6)</b><br>
+            <a>@whale_trader</a> · HOT · ✅<br>
+            <a>@macro_mike</a> · WARM · ✅<br>
+            <a>@value_val</a> · COLD · ✅<br>
+            <a>@newwhale</a> · HOT · ✅
+            <div class="t">15:03</div>
+          </div>
+
+          <div class="out msg">/pause broadcast<div class="t">15:10</div></div>
+          <div class="msg">⏸ <b>Broadcasting paused.</b> Ingest + analysis keep running; calls are held. Send <code>/resume</code> to restore.<div class="t">15:10</div></div>
+
+          <div class="out msg">/kill<div class="t">15:40</div></div>
+          <div class="msg" style="border-left:3px solid var(--red)">
+            ⚠️ <b>Halt EVERYTHING?</b> This stops ingestion <i>and</i> sending and flips the kill switch (survives restart).
+            <span class="mut">Expires in 60s.</span>
+            <div class="kbd"><button>✅ Confirm</button><button>✖️ Cancel</button></div>
+            <div class="t">15:40</div>
+          </div>
+        </div>
+        <div class="composer"><div class="inp">Message…</div><div>➤</div></div>
+      </div>
+    </div>
+
+  </div>
+
+  <p class="legend">
+    <b>Why it looks like this.</b> Every dynamic value is MarkdownV2-escaped at the boundary, tickers render in
+    <code>monospace</code> so <code>$BRK.B</code> can't break parsing, and a parse error silently falls back to plain text
+    (never a dropped call). Calls + retractions are priority-0 and bypass alert-coalescing. The <b>ops channel is separate</b>
+    so health/budget noise never lands in the group. A <b>web dashboard</b> (read-only: outcome history, credibility leaderboard,
+    cost) is the planned next surface — Next.js on Vercel reading the same Postgres — but it isn't built yet.
+  </p>
+</body>
+</html>

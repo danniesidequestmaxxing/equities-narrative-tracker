@@ -98,27 +98,27 @@ def test_link_entities_indirect_capped():
 # --- stance ----------------------------------------------------------------
 
 
-def _stance(text):
-    return RuleBasedStanceClassifier().classify(text)
+async def _stance(text):
+    return await RuleBasedStanceClassifier().classify(text)
 
 
-def test_stance_negation_makes_bearish():
-    r = _stance("$NVDA is NOT a buy up here")
+async def test_stance_negation_makes_bearish():
+    r = await _stance("$NVDA is NOT a buy up here")
     assert r.stance is Stance.BEARISH and r.negation_flag is True
 
 
-def test_stance_bullish():
-    assert _stance("loaded $SOFI calls lfg \U0001f680").stance is Stance.BULLISH
+async def test_stance_bullish():
+    assert (await _stance("loaded $SOFI calls lfg \U0001f680")).stance is Stance.BULLISH
 
 
-def test_stance_sarcasm_inverts():
-    assert _stance("imagine being long $TSLA here \U0001f480").stance is Stance.BEARISH
+async def test_stance_sarcasm_inverts():
+    assert (await _stance("imagine being long $TSLA here \U0001f480")).stance is Stance.BEARISH
 
 
-def test_stance_question_is_neutral():
-    assert _stance("is $AMD a buy at 200?").stance is Stance.NEUTRAL
+async def test_stance_question_is_neutral():
+    assert (await _stance("is $AMD a buy at 200?")).stance is Stance.NEUTRAL
 
 
-def test_stance_double_negative_bullish():
-    r = _stance("def not selling my $MSFT")
+async def test_stance_double_negative_bullish():
+    r = await _stance("def not selling my $MSFT")
     assert r.stance is Stance.BULLISH and r.negation_flag is True

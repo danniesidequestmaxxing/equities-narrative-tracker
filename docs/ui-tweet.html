@@ -1,0 +1,142 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Ansem tweet → Telegram</title>
+<style>
+  :root{--bg:#0e1621;--panel:#17212b;--bubble:#1e2c3a;--text:#fff;--muted:#7d8e9e;--link:#6ab3f3;
+    --code:rgba(255,255,255,.07);--green:#4dcb5d;--red:#f1655a;--yellow:#f0b232;}
+  *{box-sizing:border-box}
+  body{margin:0;background:#05080c;color:var(--text);padding:30px 28px 44px;
+    font-family:-apple-system,"Segoe UI",Roboto,Helvetica,Arial,"Apple Color Emoji","Segoe UI Emoji",sans-serif}
+  h1{font-size:20px;margin:0 0 22px;font-weight:650}
+  .row{display:flex;gap:28px;align-items:flex-start;flex-wrap:wrap}
+  .lab{font-size:12px;text-transform:uppercase;letter-spacing:.7px;color:#6f8497;margin:0 0 10px 4px;font-weight:600}
+
+  /* tweet input card */
+  .tweet{width:380px;background:#15202b;border:1px solid #25323d;border-radius:16px;padding:15px 16px;font-size:14px;line-height:1.5}
+  .tw-h{display:flex;align-items:center;gap:9px;margin-bottom:9px}
+  .tw-av{width:42px;height:42px;border-radius:50%;background:linear-gradient(135deg,#caa45d,#7a5a2e);display:flex;align-items:center;justify-content:center;font-size:18px}
+  .tw-nm{font-weight:700;font-size:14.5px;display:flex;align-items:center;gap:4px}
+  .tw-u{color:#8b98a5;font-size:13px}
+  .chip{display:inline-block;background:#1f2a33;border:1px solid #2f3b45;color:#4dcb5d;border-radius:8px;padding:3px 9px;font-size:12.5px;font-weight:600;margin:0 5px 8px 0}
+  .tw-link{color:#1d9bf0}
+  .chart{margin-top:11px;height:120px;border-radius:11px;border:1px solid #233039;
+    background:linear-gradient(180deg,#0c1620,#0a1219);position:relative;overflow:hidden}
+  .chart::after{content:"📈  MRVL-USDC · +42.69% · chart image";position:absolute;left:12px;bottom:10px;color:#56707f;font-size:11.5px}
+  .spark{position:absolute;right:14px;bottom:14px;width:150px;height:70px;
+    background:
+      linear-gradient(90deg,transparent 70%,rgba(77,203,93,.0) 70%),
+      repeating-linear-gradient(90deg,#0d1a12 0 7px,transparent 7px 12px);}
+  .bars{position:absolute;left:14px;bottom:14px;display:flex;align-items:flex-end;gap:3px;height:78px}
+  .bars i{width:5px;background:#2e7d44;border-radius:1px}
+  .tw-t{color:#8b98a5;font-size:12.5px;margin-top:11px;border-top:1px solid #22303a;padding-top:9px}
+
+  .arrow{align-self:center;color:#3f5366;font-size:30px;padding:0 2px}
+
+  /* telegram phone */
+  .phone{width:344px;background:var(--bg);border-radius:30px;overflow:hidden;height:760px;
+    box-shadow:0 18px 50px rgba(0,0,0,.5),0 0 0 9px #0a0e13,0 0 0 11px #1c2630;display:flex;flex-direction:column}
+  .hdr{background:var(--panel);padding:12px 14px;display:flex;align-items:center;gap:11px}
+  .ava{width:40px;height:40px;border-radius:50%;background:linear-gradient(135deg,#2aabee,#1e96c8);display:flex;align-items:center;justify-content:center;font-size:19px}
+  .nm{font-size:15px;font-weight:600}.st{font-size:12px;color:var(--muted)}
+  .feed{flex:1;overflow:hidden;padding:13px 11px;display:flex;flex-direction:column;gap:9px;
+    background:radial-gradient(circle at 20% 12%,rgba(43,82,120,.18),transparent 40%),var(--bg)}
+  .msg{align-self:flex-start;max-width:93%;background:var(--bubble);border-radius:13px 13px 13px 5px;padding:9px 11px 7px;font-size:13.5px;line-height:1.5}
+  .msg.full{max-width:99%}
+  b{font-weight:680}i{color:#b9c7d3;font-style:italic}.mut{color:var(--muted)}
+  code{background:var(--code);padding:1px 5px;border-radius:5px;font-family:ui-monospace,Menlo,monospace;font-size:12.2px}
+  a{color:var(--link);text-decoration:none}.green{color:var(--green)}.yellow{color:var(--yellow)}.red{color:var(--red)}
+  hr{border:none;border-top:1px solid rgba(255,255,255,.07);margin:7px 0}
+  .disc{color:#6f8497;font-style:italic;font-size:11.6px}.t{font-size:10.4px;color:var(--muted);text-align:right;margin-top:3px}
+
+  .note{margin-top:26px;max-width:1130px;background:#0f1822;border:1px solid #1d2a36;border-radius:12px;padding:16px 18px;font-size:13px;line-height:1.6;color:#aab9c6}
+  .note h3{margin:0 0 8px;font-size:13px;color:#dfe8ef;text-transform:uppercase;letter-spacing:.5px}
+  .note code{background:#1a2530}
+  .ok{color:var(--green)}.miss{color:var(--yellow)}
+  table{border-collapse:collapse;margin:6px 0 2px;font-size:12.5px}
+  td,th{text-align:left;padding:4px 16px 4px 0;border-bottom:1px solid #1b2630}
+  th{color:#7e93a4;font-weight:600}
+</style>
+</head>
+<body>
+  <h1>Ansem's tweet → what the group sees in Telegram</h1>
+  <div class="row">
+
+    <!-- INPUT -->
+    <div>
+      <div class="lab">Input — the X post</div>
+      <div class="tweet">
+        <div class="tw-h">
+          <div class="tw-av">🧑🏾</div>
+          <div><div class="tw-nm">Ansem <span style="color:#1d9bf0">✔</span></div><div class="tw-u">@blknoiz06</div></div>
+        </div>
+        <div><span class="chip">$MRVL ↗</span><span class="chip">$BB ↗</span><span class="chip">$NVDA ↗</span></div>
+        trading ai stocks w/ lev rn is the closest thing to 2020-2021 cycle altcoins<br><br>
+        <span class="tw-link">$MRVL</span> up ~50% in a day since Jensen said it was the next trillion dollar stock<br><br>
+        <span class="tw-link">$BB</span> up 2x in the past week ahead of earnings after ppl found out about their robotics infra QNX &amp; <span class="tw-link">$NVDA</span> partnership
+        <div class="chart"><div class="bars"><i style="height:14px"></i><i style="height:18px"></i><i style="height:13px"></i><i style="height:22px"></i><i style="height:30px"></i><i style="height:26px"></i><i style="height:44px"></i><i style="height:58px"></i><i style="height:50px"></i><i style="height:72px"></i></div></div>
+        <div class="tw-t">6:07 AM · Jun 3, 2026 · 96.1K Views</div>
+      </div>
+    </div>
+
+    <div class="arrow">→</div>
+
+    <!-- TELEGRAM OUTPUT -->
+    <div>
+      <div class="lab">Output — Telegram trading channel</div>
+      <div class="phone">
+        <div class="hdr"><div class="ava">📈</div><div><div class="nm">Narrative Tracker — Signals</div><div class="st">5 members · channel</div></div></div>
+        <div class="feed">
+
+          <div class="msg">⚡ <b>$MRVL</b> · <span class="green">🟢 bullish</span> · equity<br>
+            <a>@blknoiz06</a> posted on <code>$MRVL</code> <span class="mut">· HOT source</span><br>
+            <span class="mut">06:07 ET · just now</span><br>
+            <a>📈 Chart</a> · <a>#MRVL</a><br><span class="disc">Derived signal · not financial advice</span>
+            <div class="t">06:07 👁 5</div></div>
+
+          <div class="msg">⚡ <b>$BB</b> · <span class="green">🟢 bullish</span> · equity<br>
+            <a>@blknoiz06</a> posted on <code>$BB</code> <span class="mut">· HOT source</span><br>
+            <span class="mut">06:07 ET · just now</span><br>
+            <a>📈 Chart</a> · <a>#BB</a><br><span class="disc">Derived signal · not financial advice</span>
+            <div class="t">06:07 👁 5</div></div>
+
+          <div class="msg">⚡ <b>$NVDA</b> · <span class="green">🟢 bullish</span> · equity<br>
+            <a>@blknoiz06</a> posted on <code>$NVDA</code> <span class="mut">· HOT source</span><br>
+            <span class="mut">06:07 ET · just now</span><br>
+            <a>📈 Chart</a> · <a>#NVDA</a><br><span class="disc">Derived signal · not financial advice</span>
+            <div class="t">06:07 👁 5</div></div>
+
+          <div class="msg full" style="border-left:3px solid #2aabee">
+            🧭 <b>3 tickers from a HOT source</b> in one post<br>
+            all map to <b>AI infrastructure</b> <span class="green">🟢 rising</span> — narrative heat ↑<br>
+            <span class="mut">feeds the 16:30 digest + the deep-dive shortlist</span>
+            <div class="t">06:07</div></div>
+
+          <div class="msg full">📊 <b>Daily Digest preview</b> — AI infrastructure leading<br>
+            🟢 <code>$NVDA</code> · S +0.47 · n_eff 9.2<br>
+            🟢 <code>$MRVL</code> · S +0.38 · n_eff 4.1 <span class="mut">(new)</span><br>
+            🟢 <code>$BB</code> · S +0.21 · n_eff 2.0 <span class="mut">(new)</span>
+            <div class="t">16:30</div></div>
+
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="note">
+    <h3>What the engine actually did with this tweet (real pipeline output)</h3>
+    <table>
+      <tr><th>Ticker</th><th>Asset</th><th>Resolution</th><th>Mention conf</th><th>Narrative</th></tr>
+      <tr><td><code>$MRVL</code></td><td>equity</td><td>cashtag_exact</td><td>0.97</td><td>AI infrastructure</td></tr>
+      <tr><td><code>$BB</code></td><td>equity</td><td>cashtag_exact</td><td>0.97</td><td>AI infrastructure</td></tr>
+      <tr><td><code>$NVDA</code></td><td>equity</td><td>cashtag_exact</td><td>0.97</td><td>AI infrastructure</td></tr>
+    </table>
+    <p style="margin:10px 0 4px">
+      <span class="ok">✓ caught:</span> all three cashtags; clustered them into <b>AI infrastructure</b> (keyword <code>ai</code> + seed tickers); flagged <b>@blknoiz06 as a HOT-tier source</b> so the mentions carry high sentiment weight.<br>
+      <span class="miss">△ stance nuance:</span> shown <b>🟢 bullish</b> as it runs <i>with an LLM key</i> (the production path reads "up ~50%", "next trillion dollar stock"). The credential-free <b>rule-based fallback returns 🟡 neutral</b> here — momentum-observation language has no explicit buy-word, which is exactly the case the LLM stance classifier is for.<br>
+      <span class="miss">△ missed (M1 seed-table limits):</span> <code>QNX</code> and <b>"Jensen"→$NVDA</b> aren't in the small seed alias table (production loads EDGAR/Wikidata and resolves both). The <b>chart image wasn't separately OCR'd</b> because the text already resolved tickers (vision only fires on image-only posts).
+    </p>
+  </div>
+</body>
+</html>
