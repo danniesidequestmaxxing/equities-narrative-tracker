@@ -385,6 +385,7 @@ These six invariants are cheaper to enforce as data-model + contract decisions n
 ### Implementation Phases
 
 #### Phase M0 — Pipeline spine (prove <60s end-to-end)
+> **✅ Shipped 2026-06-03** on branch `feat/m0-pipeline-spine` — 18 tests green; end-to-end demo (`scripts/demo_spine.py`) proves dedupe + claim-before-send idempotency. External connections (twitterapi.io, Telegram) are stubbed behind interfaces pending credentials.
 - twitterapi.io **WebSocket** ingest as its **own process** (INV-6) with a durable buffer; dedupe by `(account_id, platform_post_id)` — **Postgres unique constraint is authoritative**, Redis is the pre-check (INV-1).
 - Cashtag-only extraction (`$AAPL`/`$BTC` regex) → `ticker_mentions`.
 - Minimal Telegram alert to the **trading channel** via `aiogram`, with the `sent_messages` ledger: **Postgres claim → send → record `telegram_message_id`** (INV-1, INV-4).

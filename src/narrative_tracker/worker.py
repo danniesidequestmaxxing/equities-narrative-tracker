@@ -1,0 +1,204 @@
+"""The M0 pipeline spine.
+
+    provider.stream()  ->  buffer  ->  process_post  ->  idempotent Telegram alert
+
+``process_post`` is the testable unit. Idempotency is layered:
+
+1. ``insert_post_if_new`` dedupes the post record (and gates one-time work like
+   adding mention rows + the heartbeat).
+2. The notifier's ``claim_send`` dedupes each alert. Alerts are attempted on
+   *every* sighting of a post (cheap re-extraction), so a crash between the post
+   insert and the send is recovered on restart — while a fully-processed post
+   never double-posts.
+
+This realizes the plan's "missed alert beats a duplicate" posture without missing
+alerts in the common crash window.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import contextlib
+import logging
+import signal
+
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
+from .db import idempotency, repo
+from .extract import extract_cashtags
+from .ingest.buffer import IngestBuffer
+from .ingest.provider import RawPost, SourceProvider
+from .notify.telegram_bot import AlertNotifier
+from .ops.heartbeat import ping_heartbeat
+
+log = logging.getLogger(__name__)
+
+
+async def process_post(
+    post: RawPost,
+    *,
+    session_factory: async_sessionmaker[AsyncSession],
+    notifier: AlertNotifier,
+    heartbeat_url: str | None = None,
+) -> dict:
+    """Process one post end-to-end. Returns a small result dict for tests/audit."""
+    account_id = await repo.get_or_create_account(
+        session_factory,
+        platform_user_id=post.platform_user_id,
+        handle=post.handle,
+    )
+    post_id, is_new = await idempotency.insert_post_if_new(
+        session_factory,
+        account_id=account_id,
+        platform_post_id=post.platform_post_id,
+        text=post.text,
+        posted_at=post.posted_at,
+        post_type=post.post_type,
+    )
+
+    # Extraction is cheap + deterministic -> always run so a recovery can still
+    # alert. Persisting mentions is one-time work, gated on is_new.
+    mentions = extract_cashtags(post.text)
+    if is_new:
+        await ping_heartbeat(heartbeat_url)  # heartbeat on row-written
+        await repo.add_mentions(session_factory, post_id=post_id, mentions=mentions)
+        await repo.set_post_state(
+            session_factory,
+            post_id=post_id,
+            state="live" if mentions else "archived",
+        )
+
+    alerts_sent = 0
+    for mention in mentions:
+        if await notifier.send_alert(post, mention):
+            alerts_sent += 1
+
+    if is_new:
+        await repo.record_audit(
+            session_factory,
+            event_type="post_processed",
+            payload={
+                "post_id": post_id,
+                "symbols": [m["symbol"] for m in mentions],
+                "alerts_sent": alerts_sent,
+            },
+        )
+
+    return {
+        "post_id": post_id,
+        "deduped": not is_new,
+        "symbols": [m["symbol"] for m in mentions],
+        "alerts_sent": alerts_sent,
+    }
+
+
+class Worker:
+    """Runs the ingest + process loops with graceful shutdown."""
+
+    def __init__(
+        self,
+        *,
+        provider: SourceProvider,
+        notifier: AlertNotifier,
+        session_factory: async_sessionmaker[AsyncSession],
+        heartbeat_url: str | None = None,
+        buffer_maxsize: int = 1000,
+    ) -> None:
+        self._provider = provider
+        self._notifier = notifier
+        self._sf = session_factory
+        self._heartbeat_url = heartbeat_url
+        self._buffer = IngestBuffer(maxsize=buffer_maxsize)
+        self._stop = asyncio.Event()
+
+    def request_stop(self) -> None:
+        """Signal the worker to drain and exit (also wired to SIGINT/SIGTERM)."""
+        self._stop.set()
+
+    async def run(self) -> None:
+        loop = asyncio.get_running_loop()
+        for sig in (signal.SIGINT, signal.SIGTERM):
+            with contextlib.suppress(NotImplementedError):
+                loop.add_signal_handler(sig, self._stop.set)
+
+        ingest = asyncio.create_task(self._ingest_loop(), name="ingest")
+        process = asyncio.create_task(self._process_loop(), name="process")
+        await self._stop.wait()
+        log.info("shutdown signal received; draining")
+        for task in (ingest, process):
+            task.cancel()
+        await asyncio.gather(ingest, process, return_exceptions=True)
+
+    async def _ingest_loop(self) -> None:
+        # Ingest only writes to the buffer; processing happens downstream so the
+        # stream is never blocked (INV-6).
+        async for post in self._provider.stream():
+            if self._stop.is_set():
+                break
+            await self._buffer.put(post)
+
+    async def _process_loop(self) -> None:
+        while not self._stop.is_set():
+            try:
+                post = await asyncio.wait_for(self._buffer.get(), timeout=0.5)
+            except asyncio.TimeoutError:
+                continue
+            try:
+                await process_post(
+                    post,
+                    session_factory=self._sf,
+                    notifier=self._notifier,
+                    heartbeat_url=self._heartbeat_url,
+                )
+            except Exception:  # noqa: BLE001 - one bad post must not kill the loop
+                log.exception("failed to process post %s", post.platform_post_id)
+            finally:
+                self._buffer.task_done()
+
+
+async def main() -> None:  # pragma: no cover - prod entrypoint
+    """Production entrypoint: build real provider + bot from settings and run."""
+    import logging as _logging
+
+    _logging.basicConfig(level=_logging.INFO)
+    from .config import get_settings
+    from .db.base import build_engine, build_sessionmaker, create_all
+    from .ingest.stream_client import TwitterApiIoStreamClient
+    from .notify.telegram_bot import build_aiogram_bot
+
+    settings = get_settings()
+    if not settings.feed_configured or not settings.telegram_configured:
+        log.error(
+            "Missing credentials. Set NT_TWITTERAPI_IO_KEY, NT_TELEGRAM_BOT_TOKEN, "
+            "NT_TELEGRAM_TRADING_CHAT_ID (see .env.example). Nothing to run yet."
+        )
+        return
+
+    engine = build_engine(settings.database_url)
+    await create_all(engine)
+    session_factory = build_sessionmaker(engine)
+
+    # Watchlist wiring (account ids) is loaded from the DB in a later milestone;
+    # M0 reads them from settings/env once provided.
+    provider = TwitterApiIoStreamClient(
+        api_key=settings.twitterapi_io_key,
+        ws_url=settings.twitterapi_io_ws_url,
+        account_ids=[],
+    )
+    bot = build_aiogram_bot(settings.telegram_bot_token)  # type: ignore[arg-type]
+    notifier = AlertNotifier(
+        bot=bot,
+        session_factory=session_factory,
+        trading_chat_id=settings.telegram_trading_chat_id,  # type: ignore[arg-type]
+    )
+    worker = Worker(
+        provider=provider,
+        notifier=notifier,
+        session_factory=session_factory,
+        heartbeat_url=settings.healthchecks_url,
+    )
+    await worker.run()
+
+
+if __name__ == "__main__":  # pragma: no cover
+    asyncio.run(main())
