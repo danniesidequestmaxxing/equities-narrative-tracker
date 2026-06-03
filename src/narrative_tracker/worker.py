@@ -25,7 +25,7 @@ import signal
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from .db import idempotency, repo
-from .extract import extract_cashtags
+from .extract.pipeline import ExtractionPipeline
 from .ingest.buffer import IngestBuffer
 from .ingest.provider import RawPost, SourceProvider
 from .notify.telegram_bot import AlertNotifier
@@ -33,15 +33,21 @@ from .ops.heartbeat import ping_heartbeat
 
 log = logging.getLogger(__name__)
 
+# Default M1 pipeline (rule-based stance, no vision). Prod injects LLM + vision.
+_DEFAULT_PIPELINE = ExtractionPipeline()
+
 
 async def process_post(
     post: RawPost,
     *,
     session_factory: async_sessionmaker[AsyncSession],
     notifier: AlertNotifier,
+    pipeline: ExtractionPipeline | None = None,
     heartbeat_url: str | None = None,
+    min_confidence: float = 0.0,
 ) -> dict:
     """Process one post end-to-end. Returns a small result dict for tests/audit."""
+    pipeline = pipeline or _DEFAULT_PIPELINE
     account_id = await repo.get_or_create_account(
         session_factory,
         platform_user_id=post.platform_user_id,
@@ -56,12 +62,18 @@ async def process_post(
         post_type=post.post_type,
     )
 
-    # Extraction is cheap + deterministic -> always run so a recovery can still
-    # alert. Persisting mentions is one-time work, gated on is_new.
-    mentions = extract_cashtags(post.text)
+    # Extraction is deterministic -> always run so a recovery can still alert.
+    # Persisting mentions is one-time work, gated on is_new.
+    mentions = await pipeline.extract(
+        text=post.text,
+        media_urls=post.media_urls,
+        source_post_id=post.platform_post_id,
+    )
     if is_new:
         await ping_heartbeat(heartbeat_url)  # heartbeat on row-written
-        await repo.add_mentions(session_factory, post_id=post_id, mentions=mentions)
+        await repo.add_mentions(
+            session_factory, post_id=post_id, mentions=[m.to_row() for m in mentions]
+        )
         await repo.set_post_state(
             session_factory,
             post_id=post_id,
@@ -70,6 +82,8 @@ async def process_post(
 
     alerts_sent = 0
     for mention in mentions:
+        if mention.mention_confidence < min_confidence:
+            continue
         if await notifier.send_alert(post, mention):
             alerts_sent += 1
 
@@ -79,7 +93,7 @@ async def process_post(
             event_type="post_processed",
             payload={
                 "post_id": post_id,
-                "symbols": [m["symbol"] for m in mentions],
+                "symbols": [m.symbol for m in mentions],
                 "alerts_sent": alerts_sent,
             },
         )
@@ -87,7 +101,7 @@ async def process_post(
     return {
         "post_id": post_id,
         "deduped": not is_new,
-        "symbols": [m["symbol"] for m in mentions],
+        "symbols": [m.symbol for m in mentions],
         "alerts_sent": alerts_sent,
     }
 
@@ -101,13 +115,17 @@ class Worker:
         provider: SourceProvider,
         notifier: AlertNotifier,
         session_factory: async_sessionmaker[AsyncSession],
+        pipeline: ExtractionPipeline | None = None,
         heartbeat_url: str | None = None,
+        min_confidence: float = 0.0,
         buffer_maxsize: int = 1000,
     ) -> None:
         self._provider = provider
         self._notifier = notifier
         self._sf = session_factory
+        self._pipeline = pipeline or _DEFAULT_PIPELINE
         self._heartbeat_url = heartbeat_url
+        self._min_confidence = min_confidence
         self._buffer = IngestBuffer(maxsize=buffer_maxsize)
         self._stop = asyncio.Event()
 
@@ -148,7 +166,9 @@ class Worker:
                     post,
                     session_factory=self._sf,
                     notifier=self._notifier,
+                    pipeline=self._pipeline,
                     heartbeat_url=self._heartbeat_url,
+                    min_confidence=self._min_confidence,
                 )
             except Exception:  # noqa: BLE001 - one bad post must not kill the loop
                 log.exception("failed to process post %s", post.platform_post_id)

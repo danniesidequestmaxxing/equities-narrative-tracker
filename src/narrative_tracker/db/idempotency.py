@@ -24,6 +24,7 @@ from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from ..text_utils import content_sha
 from .models import Post, SentMessage
 
 
@@ -60,6 +61,7 @@ async def insert_post_if_new(
             text=text,
             posted_at=posted_at,
             post_type=post_type,
+            content_sha=content_sha(text),
         )
         session.add(post)
         try:

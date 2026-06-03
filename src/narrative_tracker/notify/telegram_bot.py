@@ -20,9 +20,12 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from ..db import idempotency
 from ..ingest.provider import RawPost
+from ..schemas.mention import Mention, OptionDetail, Stance
 from .escaping import md, md_code, md_url
 
 log = logging.getLogger(__name__)
+
+_STANCE_EMOJI = {Stance.BULLISH: "\U0001f7e2", Stance.BEARISH: "\U0001f534"}  # 🟢 🔴
 
 
 class BotProtocol(Protocol):
@@ -35,14 +38,26 @@ def tradingview_url(symbol: str) -> str:
     return f"https://www.tradingview.com/chart/?symbol={symbol}"
 
 
-def build_alert(post: RawPost, mention: dict) -> tuple[str, str]:
+def _option_str(od: OptionDetail) -> str:
+    if od.strike is not None:
+        strike = int(od.strike) if od.strike == int(od.strike) else od.strike
+        core = f"{strike}{od.right.value}"
+    else:
+        core = od.right.value
+    return f"{core} {od.expiry_raw}" if od.expiry_raw else core
+
+
+def build_alert(post: RawPost, mention: Mention) -> tuple[str, str]:
     """Return ``(markdown_v2, plain)`` for a single ticker alert."""
-    symbol = mention["symbol"]
+    symbol = mention.symbol
     tv = tradingview_url(symbol)
     handle_url = f"https://x.com/{post.handle}" if post.handle else tv
-    asset = mention.get("asset_class", "equity")
+    asset = mention.asset_class.value
+    emoji = _STANCE_EMOJI.get(mention.stance, "\U0001f7e1")  # 🟡 default
+    opt = f" {_option_str(mention.option_detail)}" if mention.option_detail else ""
+    header = f"${symbol}{opt}"
     mdv2 = (
-        f"⚡ *{md('$' + symbol)}* · {md(asset)}\n"
+        f"⚡ *{md(header)}* · {emoji} {md(mention.stance.value)} · {md(asset)}\n"
         f"[{md('@' + (post.handle or 'source'))}]({md_url(handle_url)}) "
         f"posted on `{md_code('$' + symbol)}`\n"
         f"{md(post.posted_at.strftime('%H:%M ET'))}\n"
@@ -51,7 +66,7 @@ def build_alert(post: RawPost, mention: dict) -> tuple[str, str]:
         f"_Derived signal · not financial advice_"
     )
     plain = (
-        f"[ALERT] ${symbol} ({asset})\n"
+        f"[ALERT] ${symbol}{opt} {mention.stance.value} ({asset})\n"
         f"@{post.handle or 'source'} posted on ${symbol} at "
         f"{post.posted_at.strftime('%H:%M ET')}\n"
         f"{tv}\n"
@@ -74,12 +89,20 @@ class AlertNotifier:
         self._sf = session_factory
         self._chat_id = trading_chat_id
 
-    async def send_alert(self, post: RawPost, mention: dict) -> bool:
+    @staticmethod
+    def _mention_key(post: RawPost, mention: Mention) -> str:
+        key = idempotency.alert_idempotency_key(
+            post.platform_user_id, post.platform_post_id, mention.symbol
+        )
+        if mention.option_detail:
+            od = mention.option_detail
+            key += f":{od.right.value}{od.strike}:{od.expiry_raw or ''}"
+        return key
+
+    async def send_alert(self, post: RawPost, mention: Mention) -> bool:
         """Send one alert for a (post, ticker). Returns ``True`` if a message was
         actually sent, ``False`` if it was a deduped no-op."""
-        key = idempotency.alert_idempotency_key(
-            post.platform_user_id, post.platform_post_id, mention["symbol"]
-        )
+        key = self._mention_key(post, mention)
         # Claim BEFORE sending (INV-1): if already claimed, do not send.
         claimed = await idempotency.claim_send(
             self._sf, idempotency_key=key, chat_id=self._chat_id

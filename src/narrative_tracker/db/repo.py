@@ -58,6 +58,10 @@ async def add_mentions(
                 asset_class=m.get("asset_class", "equity"),
                 resolution_method=m.get("resolution_method", "cashtag_exact"),
                 mention_confidence=m.get("mention_confidence", 1.0),
+                stance=m.get("stance", "neutral"),
+                negation_flag=m.get("negation_flag", False),
+                stance_confidence=m.get("stance_confidence", 0.0),
+                option_detail=m.get("option_detail"),
             )
             for m in mentions
         ]

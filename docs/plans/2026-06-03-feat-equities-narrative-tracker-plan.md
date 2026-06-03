@@ -394,6 +394,7 @@ These six invariants are cheaper to enforce as data-model + contract decisions n
 - Mock files: `worker/ingest/stream_client.py`, `worker/ingest/buffer.py`, `worker/extract/cashtag.py`, `notify/telegram_bot.py`, `db/models.py`, `db/idempotency.py`.
 
 #### Phase M1 — Full extraction (the signal-quality phase)
+> **✅ Shipped 2026-06-03** on branch `feat/m0-pipeline-spine` — 50 tests green. `Mention` schema (two confidences), options parser, common-word collision gate, cross-asset symbology + alias linking, rule-based stance/negation/sarcasm (also the fail-safe degraded mode), vision interface (budget + dedup-cache), the cascade orchestrator, and cross-provider dedupe/tombstones. Exit criteria proven: cashtag-less + image-only resolve; "$X is NOT a buy" → bearish. LLM/GLiNER/vision models sit behind interfaces pending credentials.
 - NER + LLM disambiguation (instructor + native structured outputs); **stance + negation** as first-class fields with their own confidence.
 - **Vision/OCR for chart-image posts** (Gemini 3.x Pro), budget-gated, dedup-cached by media-URL hash.
 - Cross-asset symbology resolution → `instruments`; options syntax parsing (`$SPY 600c`, LEAPS); common-word ticker collision list.

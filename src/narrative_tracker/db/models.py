@@ -66,6 +66,11 @@ class Post(Base):
     posted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     ingested_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
     state: Mapped[str] = mapped_column(String(16), default="seen")
+    # M1: cross-provider near-dup detection + tombstones.
+    content_sha: Mapped[str | None] = mapped_column(String(64), index=True, nullable=True)
+    deleted_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
 
     account: Mapped["Account"] = relationship(back_populates="posts")
     mentions: Mapped[list["TickerMention"]] = relationship(back_populates="post")
@@ -79,9 +84,14 @@ class TickerMention(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     post_id: Mapped[int] = mapped_column(ForeignKey("posts.id"), index=True)
     symbol: Mapped[str] = mapped_column(String(24), index=True)
-    asset_class: Mapped[str] = mapped_column(String(8), default="equity")
+    asset_class: Mapped[str] = mapped_column(String(12), default="equity")
     resolution_method: Mapped[str] = mapped_column(String(24), default="cashtag_exact")
     mention_confidence: Mapped[float] = mapped_column(Float, default=1.0)
+    # M1: stance is a first-class field with its own confidence.
+    stance: Mapped[str] = mapped_column(String(8), default="neutral")
+    negation_flag: Mapped[bool] = mapped_column(Boolean, default=False)
+    stance_confidence: Mapped[float] = mapped_column(Float, default=0.0)
+    option_detail: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
 
     post: Mapped["Post"] = relationship(back_populates="mentions")

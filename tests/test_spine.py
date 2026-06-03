@@ -8,6 +8,7 @@ from typing import Any
 
 from narrative_tracker.db import idempotency, repo
 from narrative_tracker.notify.telegram_bot import AlertNotifier
+from narrative_tracker.schemas.mention import AssetClass, Mention, ResolutionMethod
 from narrative_tracker.worker import process_post
 
 
@@ -112,7 +113,11 @@ async def test_safe_send_falls_back_to_plain(session_factory, make_post):
     notifier = _notifier(bot, session_factory)
     sent = await notifier.send_alert(
         make_post(text="$BRK.B", post_id="p9", user_id="u9", handle="value_guy"),
-        {"symbol": "BRK.B", "asset_class": "equity"},
+        Mention(
+            symbol="BRK.B",
+            asset_class=AssetClass.EQUITY,
+            resolution_method=ResolutionMethod.CASHTAG_EXACT,
+        ),
     )
     assert sent is True
     # First attempt (MarkdownV2) raised; second attempt (plain) succeeded.
