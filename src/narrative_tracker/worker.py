@@ -283,9 +283,10 @@ async def main() -> None:  # pragma: no cover - prod entrypoint
             "recommend", 3600.0,
             lambda now: cadence.run_recommend(
                 session_factory, analyzer, market, notifier, config,
-                now=now, date_label=now.strftime("%Y-%m-%d"),
+                now=now, date_label=now.strftime("%Y-%m-%d"), paper=settings.paper_trade,
             ),
         ))
+        log.info("recommend mode: %s", "PAPER (no broadcast)" if settings.paper_trade else "LIVE")
 
         async def _refresh_and_score(now):
             live = await recs.live_symbols(session_factory)

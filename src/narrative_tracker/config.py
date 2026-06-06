@@ -34,6 +34,10 @@ class Settings(BaseSettings):
     # Market data (Polygon / "Massive"). Empty -> recommend + scoring stay disabled.
     polygon_api_key: str | None = None
 
+    # Paper-trade mode: generate + score calls but DO NOT broadcast to the group.
+    # Default ON — flip to false only after a paper-trading period proves accuracy.
+    paper_trade: bool = True
+
     # LLM (stance / extraction). Empty -> deterministic rule-based fallback only.
     llm_model: str | None = None          # e.g. "openai/gpt-5.2", "anthropic/claude-opus-4-8"
     llm_budget_usd: float = 100.0

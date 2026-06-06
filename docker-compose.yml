@@ -1,0 +1,52 @@
+# Local / single-box deploy: Postgres + Redis + the always-on worker + the health API.
+# Fill .env first (see .env.example). For managed hosting (Railway/Fly/Hetzner),
+# point NT_DATABASE_URL / NT_REDIS_URL at managed instances instead.
+
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: nt
+      POSTGRES_PASSWORD: nt
+      POSTGRES_DB: narrative_tracker
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U nt"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  redis:
+    image: redis:7
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+
+  worker:
+    build: .
+    env_file: .env
+    environment:
+      NT_DATABASE_URL: postgresql+asyncpg://nt:nt@postgres:5432/narrative_tracker
+      NT_REDIS_URL: redis://redis:6379/0
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    restart: unless-stopped
+    command: ["python", "-m", "narrative_tracker.worker"]
+
+  api:
+    build: .
+    env_file: .env
+    environment:
+      NT_DATABASE_URL: postgresql+asyncpg://nt:nt@postgres:5432/narrative_tracker
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+    command: ["uvicorn", "narrative_tracker.api.health:app", "--host", "0.0.0.0", "--port", "8000"]
+    ports:
+      - "8000:8000"
+
+volumes:
+  pgdata:

@@ -74,7 +74,7 @@ def _recommend_inputs(analyzer: Analyzer, now_ts: float, config: RiskConfig) -> 
 async def run_recommend(
     sf, analyzer: Analyzer, market_provider: MarketDataProvider, notifier: AlertNotifier,
     config: RiskConfig, *, now: datetime, date_label: str, broadcast: bool = True,
-    max_calls: int = 3, horizon: str = "swing · 1-3w",
+    paper: bool = False, max_calls: int = 3, horizon: str = "swing · 1-3w",
 ) -> dict:
     if await killswitch.is_killed(sf):
         return {"skipped": "killed"}
@@ -87,7 +87,7 @@ async def run_recommend(
     )
     can_broadcast = broadcast and await killswitch.get_pause(sf) == killswitch.PAUSE_NONE
     calls_by = {c.symbol: c for c in calls}
-    sent = suppressed = 0
+    sent = paper_calls = suppressed = 0
     for ev in evals:
         call = calls_by.get(ev["symbol"]) if ev["passed"] else None
         if call is not None:
@@ -95,13 +95,17 @@ async def run_recommend(
                 sf, call=call, credibility_at_issuance=0.0,
                 sources=contribs_by.get(call.symbol, []), gates=ev["gates"], issued_at=now,
             )
-            if can_broadcast and await notifier.broadcast_call(call):
+            if paper:
+                # Track + score it (builds a real record) but DON'T broadcast.
+                await recs.mark_live(sf, call_id=call.call_id)
+                paper_calls += 1
+            elif can_broadcast and await notifier.broadcast_call(call):
                 await recs.mark_live(sf, call_id=call.call_id)
                 sent += 1
         else:
             suppressed += 1
             await recs.save_suppressed(sf, symbol=ev["symbol"], gates=ev["gates"])
-    return {"calls": len(calls), "broadcast": sent, "suppressed": suppressed}
+    return {"calls": len(calls), "broadcast": sent, "paper": paper_calls, "suppressed": suppressed}
 
 
 async def run_refresh_bars(sf, provider, symbols, *, source: str = "polygon", days: int = 400) -> dict:
