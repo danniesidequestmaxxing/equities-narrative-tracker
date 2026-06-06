@@ -121,6 +121,15 @@ async def insert_account_score(
         await session.commit()
 
 
+async def get_account_id(
+    session_factory: async_sessionmaker[AsyncSession], *, platform_user_id: str
+) -> int | None:
+    async with session_factory() as session:
+        return await session.scalar(
+            select(Account.id).where(Account.platform_user_id == platform_user_id)
+        )
+
+
 async def get_credibility(
     session_factory: async_sessionmaker[AsyncSession],
     *,

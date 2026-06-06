@@ -219,6 +219,8 @@ class Recommendation(Base):
     state: Mapped[str] = mapped_column(String(12), default="candidate")
     suppress_reason: Mapped[str | None] = mapped_column(String(128), nullable=True)
     credibility_at_issuance: Mapped[float] = mapped_column(Float, default=0.0)
+    # Attribution contribs [{account, stance(+/-1), conf, mention_time}] for scoring.
+    sources: Mapped[list] = mapped_column(JSON, default=list)
     issued_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
 
 

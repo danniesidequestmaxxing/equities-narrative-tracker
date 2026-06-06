@@ -165,6 +165,18 @@ class AlertNotifier:
         )
         return True
 
+    async def broadcast_text(self, *, idempotency_key: str, mdv2: str, plain: str) -> bool:
+        """Broadcast an arbitrary message (e.g. a digest), idempotent on the key."""
+        if not await idempotency.claim_send(
+            self._sf, idempotency_key=idempotency_key, chat_id=self._chat_id
+        ):
+            return False
+        message_id = await self._safe_send(mdv2, plain)
+        await idempotency.mark_sent(
+            self._sf, idempotency_key=idempotency_key, telegram_message_id=message_id
+        )
+        return True
+
     async def _safe_send(self, text_mdv2: str, plain_fallback: str) -> int:
         """Send MarkdownV2; on a parse error, resend as plain text so a template
         bug never drops an alert. Returns the Telegram ``message_id``."""

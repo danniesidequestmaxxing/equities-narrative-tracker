@@ -21,15 +21,18 @@ import asyncio
 import contextlib
 import logging
 import signal
+from datetime import datetime, timezone
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from .analyze.analyzer import Analyzer
 from .db import idempotency, repo
 from .extract.pipeline import ExtractionPipeline
 from .ingest.buffer import IngestBuffer
 from .ingest.provider import RawPost, SourceProvider
 from .notify.telegram_bot import AlertNotifier
 from .ops.heartbeat import ping_heartbeat
+from .scheduler import Scheduler
 
 log = logging.getLogger(__name__)
 
@@ -43,6 +46,7 @@ async def process_post(
     session_factory: async_sessionmaker[AsyncSession],
     notifier: AlertNotifier,
     pipeline: ExtractionPipeline | None = None,
+    analyzer: Analyzer | None = None,
     heartbeat_url: str | None = None,
     min_confidence: float = 0.0,
 ) -> dict:
@@ -79,6 +83,19 @@ async def process_post(
             post_id=post_id,
             state="live" if mentions else "archived",
         )
+        # Feed the standing Analyzer (sentiment + narratives + contributors) so the
+        # cadence jobs have state to work from. Credibility is the as-of value.
+        if analyzer is not None and mentions:
+            cred = await repo.get_credibility(
+                session_factory, account_id=account_id, as_of=post.posted_at
+            )
+            for m in mentions:
+                analyzer.ingest(
+                    symbol=m.symbol, text=post.text, stance=m.stance.value,
+                    stance_confidence=m.stance_confidence, credibility=cred,
+                    ts=post.posted_at.timestamp(), account=post.platform_user_id,
+                    asset_class=m.asset_class.value,
+                )
 
     alerts_sent = 0
     for mention in mentions:
@@ -116,16 +133,22 @@ class Worker:
         notifier: AlertNotifier,
         session_factory: async_sessionmaker[AsyncSession],
         pipeline: ExtractionPipeline | None = None,
+        analyzer: Analyzer | None = None,
+        scheduler: Scheduler | None = None,
         heartbeat_url: str | None = None,
         min_confidence: float = 0.0,
+        tick_interval_s: float = 30.0,
         buffer_maxsize: int = 1000,
     ) -> None:
         self._provider = provider
         self._notifier = notifier
         self._sf = session_factory
         self._pipeline = pipeline or _DEFAULT_PIPELINE
+        self._analyzer = analyzer
+        self._scheduler = scheduler
         self._heartbeat_url = heartbeat_url
         self._min_confidence = min_confidence
+        self._tick_interval_s = tick_interval_s
         self._buffer = IngestBuffer(maxsize=buffer_maxsize)
         self._stop = asyncio.Event()
 
@@ -139,13 +162,24 @@ class Worker:
             with contextlib.suppress(NotImplementedError):
                 loop.add_signal_handler(sig, self._stop.set)
 
-        ingest = asyncio.create_task(self._ingest_loop(), name="ingest")
-        process = asyncio.create_task(self._process_loop(), name="process")
+        tasks = [
+            asyncio.create_task(self._ingest_loop(), name="ingest"),
+            asyncio.create_task(self._process_loop(), name="process"),
+        ]
+        if self._scheduler is not None:
+            tasks.append(asyncio.create_task(self._scheduler_loop(), name="scheduler"))
         await self._stop.wait()
         log.info("shutdown signal received; draining")
-        for task in (ingest, process):
+        for task in tasks:
             task.cancel()
-        await asyncio.gather(ingest, process, return_exceptions=True)
+        await asyncio.gather(*tasks, return_exceptions=True)
+
+    async def _scheduler_loop(self) -> None:
+        while not self._stop.is_set():
+            with contextlib.suppress(Exception):
+                await self._scheduler.tick(datetime.now(timezone.utc))
+            with contextlib.suppress(asyncio.TimeoutError):
+                await asyncio.wait_for(self._stop.wait(), timeout=self._tick_interval_s)
 
     async def _ingest_loop(self) -> None:
         # Ingest only writes to the buffer; processing happens downstream so the
@@ -167,6 +201,7 @@ class Worker:
                     session_factory=self._sf,
                     notifier=self._notifier,
                     pipeline=self._pipeline,
+                    analyzer=self._analyzer,
                     heartbeat_url=self._heartbeat_url,
                     min_confidence=self._min_confidence,
                 )
@@ -212,14 +247,48 @@ async def main() -> None:  # pragma: no cover - prod entrypoint
         trading_chat_id=settings.telegram_trading_chat_id,  # type: ignore[arg-type]
     )
     # LLM stance when configured; deterministic rule-based otherwise (fail-safe).
+    from . import jobs as cadence
+    from .analyze.analyzer import Analyzer
     from .extract.stance import build_stance_classifier
+    from .recommend.types import RiskConfig
+    from .scheduler import ScheduledJob, Scheduler
 
     pipeline = ExtractionPipeline(stance=build_stance_classifier(model=settings.llm_model))
+    analyzer = Analyzer()
+
+    # Digest needs no market data, so it always runs. Recommend + scoring require a
+    # real MarketDataProvider (Polygon) + bars feed — wired at go-live; until then
+    # the service runs alerts + analyzer + digests.
+    scheduled = [
+        ScheduledJob(
+            "digest-daily", 86400.0,
+            lambda now: cadence.run_digest(
+                session_factory, analyzer, notifier,
+                cadence_label="Daily", date_label=now.strftime("%Y-%m-%d"),
+                now_ts=now.timestamp(),
+            ),
+        )
+    ]
+    market_provider = None  # TODO(go-live): PolygonMarketData(settings...)
+    if market_provider is not None:  # pragma: no cover
+        config = RiskConfig()
+        scheduled.append(ScheduledJob(
+            "recommend", 3600.0,
+            lambda now: cadence.run_recommend(
+                session_factory, analyzer, market_provider, notifier, config,
+                now=now, date_label=now.strftime("%Y-%m-%d"),
+            ),
+        ))
+    else:
+        log.warning("market data provider not configured; recommend + scoring disabled")
+
     worker = Worker(
         provider=provider,
         notifier=notifier,
         session_factory=session_factory,
         pipeline=pipeline,
+        analyzer=analyzer,
+        scheduler=Scheduler(scheduled),
         heartbeat_url=settings.healthchecks_url,
     )
     await worker.run()
