@@ -31,6 +31,9 @@ class Settings(BaseSettings):
     telegram_trading_chat_id: int | None = None
     telegram_ops_chat_id: int | None = None
 
+    # Market data (Polygon / "Massive"). Empty -> recommend + scoring stay disabled.
+    polygon_api_key: str | None = None
+
     # LLM (stance / extraction). Empty -> deterministic rule-based fallback only.
     llm_model: str | None = None          # e.g. "openai/gpt-5.2", "anthropic/claude-opus-4-8"
     llm_budget_usd: float = 100.0

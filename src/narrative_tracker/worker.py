@@ -269,16 +269,33 @@ async def main() -> None:  # pragma: no cover - prod entrypoint
             ),
         )
     ]
-    market_provider = None  # TODO(go-live): PolygonMarketData(settings...)
-    if market_provider is not None:  # pragma: no cover
+    if settings.polygon_api_key:  # pragma: no cover
+        from .db import recs
+        from .db.bars import DbBarsProvider, DbLedgerProvider
+        from .enrich.polygon import PolygonMarketData, build_polygon_fetch
+
+        market = PolygonMarketData(fetch=build_polygon_fetch(settings.polygon_api_key))
         config = RiskConfig()
+        bars_provider = DbBarsProvider(session_factory)
+        ledger_provider = DbLedgerProvider(session_factory)
+
         scheduled.append(ScheduledJob(
             "recommend", 3600.0,
             lambda now: cadence.run_recommend(
-                session_factory, analyzer, market_provider, notifier, config,
+                session_factory, analyzer, market, notifier, config,
                 now=now, date_label=now.strftime("%Y-%m-%d"),
             ),
         ))
+
+        async def _refresh_and_score(now):
+            live = await recs.live_symbols(session_factory)
+            await cadence.run_refresh_bars(session_factory, market, live)
+            await cadence.run_scoring(
+                session_factory, bars_provider, now=now, max_age_s=15 * 86400,
+                ledger_provider=ledger_provider,
+            )
+
+        scheduled.append(ScheduledJob("refresh-score", 86400.0, _refresh_and_score))
     else:
         log.warning("market data provider not configured; recommend + scoring disabled")
 

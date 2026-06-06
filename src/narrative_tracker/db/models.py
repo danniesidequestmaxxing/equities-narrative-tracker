@@ -286,3 +286,45 @@ class BudgetLedger(Base):
     amount: Mapped[float] = mapped_column(Float)
     ref: Mapped[str] = mapped_column(String(128), unique=True)
     charged_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+
+# --- M7: market data (as-of-issuance unadjusted bars + corporate actions) ---
+
+
+class MarketBar(Base):
+    """Immutable as-of-issuance OHLC bar (unadjusted). The scorer reads these."""
+
+    __tablename__ = "market_bars"
+    __table_args__ = (
+        UniqueConstraint("symbol", "interval", "ts", "source", name="uq_bar"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    symbol: Mapped[str] = mapped_column(String(24), index=True)
+    interval: Mapped[str] = mapped_column(String(8), default="1d")
+    ts: Mapped[int] = mapped_column(BigInteger)  # epoch seconds
+    open: Mapped[float] = mapped_column(Float)
+    high: Mapped[float] = mapped_column(Float)
+    low: Mapped[float] = mapped_column(Float)
+    close: Mapped[float] = mapped_column(Float)
+    volume: Mapped[float] = mapped_column(Float, default=0.0)
+    adjustment_basis: Mapped[str] = mapped_column(String(12), default="unadjusted")
+    source: Mapped[str] = mapped_column(String(16), default="polygon")
+    fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+
+class Adjustment(Base):
+    """Corporate-action ledger (splits/dividends), replayed forward by the scorer."""
+
+    __tablename__ = "adjustments"
+    __table_args__ = (
+        UniqueConstraint("symbol", "ex_ts", "kind", "source", name="uq_adjustment"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    symbol: Mapped[str] = mapped_column(String(24), index=True)
+    ex_ts: Mapped[int] = mapped_column(BigInteger)  # epoch seconds of ex-date
+    kind: Mapped[str] = mapped_column(String(12))   # split | dividend
+    value: Mapped[float] = mapped_column(Float)     # split ratio, or cash/share
+    source: Mapped[str] = mapped_column(String(16), default="polygon")
+    ingested_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)

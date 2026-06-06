@@ -104,8 +104,20 @@ async def run_recommend(
     return {"calls": len(calls), "broadcast": sent, "suppressed": suppressed}
 
 
+async def run_refresh_bars(sf, provider, symbols, *, source: str = "polygon", days: int = 400) -> dict:
+    """Ingest unadjusted bars + corporate actions for the given symbols."""
+    from .db import bars as db_bars
+
+    refreshed = 0
+    for sym in symbols:
+        await db_bars.save_bars(sf, symbol=sym, interval="1d", source=source, bars=await provider.fetch_bars(sym, days=days))
+        await db_bars.save_adjustments(sf, symbol=sym, source=source, adjustments=await provider.fetch_adjustments(sym))
+        refreshed += 1
+    return {"refreshed": refreshed}
+
+
 async def run_scoring(
-    sf, bars_provider, *, now: datetime, max_age_s: int, bench_provider=None,
+    sf, bars_provider, *, now: datetime, max_age_s: int, bench_provider=None, ledger_provider=None,
 ) -> dict:
     due = await recs.due_for_scoring(sf, now=now, max_age_s=max_age_s)
     closed = 0
@@ -113,6 +125,7 @@ async def run_scoring(
         bars = await bars_provider(rec.symbol)
         if not bars:
             continue
+        ledger = await ledger_provider(rec.symbol) if ledger_provider else ()
         # SQLite drops tz; treat stored issued_at as UTC for a consistent epoch.
         issued = rec.issued_at if rec.issued_at.tzinfo else rec.issued_at.replace(tzinfo=timezone.utc)
         scall = ScoreCall(
@@ -121,7 +134,7 @@ async def run_scoring(
             (Decimal(str(rec.targets.get("t1"))),), max_age_s,
         )
         bench = await bench_provider(rec.symbol) if bench_provider else ()
-        out = score_call(scall, bars, bench)
+        out = score_call(scall, bars, bench, ledger=ledger)
         if out.status != "scored":
             continue
         await recs.close_recommendation(
