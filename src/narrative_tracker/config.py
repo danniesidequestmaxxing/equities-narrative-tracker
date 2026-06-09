@@ -23,9 +23,12 @@ class Settings(BaseSettings):
     # Redis is an optional fast-path cache in M0; Postgres is authoritative (INV-1).
     redis_url: str | None = None
 
-    # X / Twitter data feed (twitterapi.io).
+    # X / Twitter data feed (twitterapi.io) — polling via advanced_search.
     twitterapi_io_key: str | None = None
-    twitterapi_io_ws_url: str = "wss://api.twitterapi.io/twitter/stream"
+    twitterapi_io_base_url: str = "https://api.twitterapi.io"
+    watchlist: str = ""          # comma-separated handles to poll, e.g. "blknoiz06,elonmusk"
+    poll_interval_s: int = 120
+    initial_lookback_s: int = 3600  # on first poll, pull the last hour so it's not silent
 
     # Telegram.
     telegram_bot_token: str | None = None
@@ -74,6 +77,10 @@ class Settings(BaseSettings):
     @property
     def feed_configured(self) -> bool:
         return bool(self.twitterapi_io_key)
+
+    @property
+    def watchlist_handles(self) -> list[str]:
+        return [h.strip().lstrip("@") for h in self.watchlist.split(",") if h.strip()]
 
 
 @lru_cache

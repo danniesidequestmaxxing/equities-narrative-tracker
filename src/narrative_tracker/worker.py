@@ -218,7 +218,7 @@ async def main() -> None:  # pragma: no cover - prod entrypoint
     _logging.basicConfig(level=_logging.INFO)
     from .config import get_settings
     from .db.base import build_engine, build_sessionmaker, create_all
-    from .ingest.stream_client import TwitterApiIoStreamClient
+    from .ingest.polling_client import TwitterApiIoPollingProvider
     from .notify.telegram_bot import build_aiogram_bot
 
     settings = get_settings()
@@ -233,12 +233,12 @@ async def main() -> None:  # pragma: no cover - prod entrypoint
     await create_all(engine)
     session_factory = build_sessionmaker(engine)
 
-    # Watchlist wiring (account ids) is loaded from the DB in a later milestone;
-    # M0 reads them from settings/env once provided.
-    provider = TwitterApiIoStreamClient(
+    provider = TwitterApiIoPollingProvider(
         api_key=settings.twitterapi_io_key,
-        ws_url=settings.twitterapi_io_ws_url,
-        account_ids=[],
+        handles=settings.watchlist_handles,
+        base_url=settings.twitterapi_io_base_url,
+        poll_interval_s=settings.poll_interval_s,
+        initial_lookback_s=settings.initial_lookback_s,
     )
     bot = build_aiogram_bot(settings.telegram_bot_token)  # type: ignore[arg-type]
     notifier = AlertNotifier(
