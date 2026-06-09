@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from functools import lru_cache
 
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -54,6 +55,17 @@ class Settings(BaseSettings):
         env_file_encoding="utf-8",
         extra="ignore",
     )
+
+    @field_validator("database_url")
+    @classmethod
+    def _ensure_async_pg(cls, v: str) -> str:
+        """Accept Railway/Heroku-style ``postgres(ql)://`` URLs and rewrite them to
+        the async driver the app needs — so a plain ``${{Postgres.DATABASE_URL}}``
+        reference works without manual scheme surgery."""
+        for prefix in ("postgresql://", "postgres://"):
+            if v.startswith(prefix):
+                return "postgresql+asyncpg://" + v[len(prefix):]
+        return v
 
     @property
     def telegram_configured(self) -> bool:

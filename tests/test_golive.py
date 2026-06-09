@@ -69,3 +69,10 @@ async def test_preflight_db_check_connects(db_url):
     s = Settings(_env_file=None, database_url=db_url)
     ok, detail = await check_db(s)
     assert ok is True and detail == "connected"
+
+
+def test_database_url_normalizes_to_asyncpg():
+    assert Settings(_env_file=None, database_url="postgresql://u:p@h:5432/db").database_url == "postgresql+asyncpg://u:p@h:5432/db"
+    assert Settings(_env_file=None, database_url="postgres://u:p@h/db").database_url.startswith("postgresql+asyncpg://")
+    # non-postgres schemes pass through untouched
+    assert Settings(_env_file=None, database_url="sqlite+aiosqlite:///x.db").database_url == "sqlite+aiosqlite:///x.db"
