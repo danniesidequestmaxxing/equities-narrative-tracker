@@ -122,10 +122,16 @@ async def insert_account_score(
 
 
 async def active_handles(session_factory: async_sessionmaker[AsyncSession]) -> list[str]:
-    """Handles of currently-active watched accounts (drives the poller)."""
+    """Distinct handles of active watched accounts (drives the poller)."""
     async with session_factory() as session:
         rows = await session.scalars(select(Account.handle).where(Account.active.is_(True)))
-    return [h for h in rows if h]
+    out: list[str] = []
+    seen: set[str] = set()
+    for h in rows:
+        if h and h.lower() not in seen:
+            seen.add(h.lower())
+            out.append(h)
+    return out
 
 
 async def get_account_id(
