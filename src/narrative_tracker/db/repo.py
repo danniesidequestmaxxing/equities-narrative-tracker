@@ -121,6 +121,13 @@ async def insert_account_score(
         await session.commit()
 
 
+async def active_handles(session_factory: async_sessionmaker[AsyncSession]) -> list[str]:
+    """Handles of currently-active watched accounts (drives the poller)."""
+    async with session_factory() as session:
+        rows = await session.scalars(select(Account.handle).where(Account.active.is_(True)))
+    return [h for h in rows if h]
+
+
 async def get_account_id(
     session_factory: async_sessionmaker[AsyncSession], *, platform_user_id: str
 ) -> int | None:

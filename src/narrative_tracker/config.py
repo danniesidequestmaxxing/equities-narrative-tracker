@@ -34,6 +34,7 @@ class Settings(BaseSettings):
     telegram_bot_token: str | None = None
     telegram_trading_chat_id: int | None = None
     telegram_ops_chat_id: int | None = None
+    admin_ids: str = ""  # comma-separated Telegram user ids allowed to run /admin commands
 
     # Market data (Polygon / "Massive"). Empty -> recommend + scoring stay disabled.
     polygon_api_key: str | None = None
@@ -81,6 +82,15 @@ class Settings(BaseSettings):
     @property
     def watchlist_handles(self) -> list[str]:
         return [h.strip().lstrip("@") for h in self.watchlist.split(",") if h.strip()]
+
+    @property
+    def admin_id_list(self) -> list[int]:
+        out = []
+        for part in self.admin_ids.split(","):
+            part = part.strip()
+            if part.isdigit():
+                out.append(int(part))
+        return out
 
 
 @lru_cache

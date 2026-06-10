@@ -44,8 +44,10 @@ def _to_rawpost(tweet: dict) -> RawPost | None:
         for m in (tweet.get("extendedEntities", {}) or tweet.get("extended_entities", {})).get("media", []) or []
         if m.get("media_url_https") or m.get("media_url")
     ]
+    # Key accounts by handle (lowercased): it's what /addsource, the poller query,
+    # and the tweet author all share — keeps tier + credibility coherent.
     return RawPost(
-        platform_user_id=str(user_id or handle or "unknown"),
+        platform_user_id=str(handle or user_id or "unknown").lower(),
         handle=handle,
         platform_post_id=str(post_id),
         text=tweet.get("text") or tweet.get("full_text") or "",
@@ -69,7 +71,8 @@ class TwitterApiIoPollingProvider:
         self,
         *,
         api_key: str | None,
-        handles: list[str],
+        handles: list[str] | None = None,
+        handles_provider: Callable[[], Awaitable[list[str]]] | None = None,
         base_url: str = "https://api.twitterapi.io",
         poll_interval_s: int = 120,
         initial_lookback_s: int = 3600,
@@ -77,7 +80,8 @@ class TwitterApiIoPollingProvider:
         now: Callable[[], datetime] | None = None,
     ) -> None:
         self._api_key = api_key
-        self._handles = [h.lstrip("@") for h in handles if h.strip()]
+        self._static = [h.lstrip("@") for h in (handles or []) if h.strip()]
+        self._handles_provider = handles_provider
         self._base = base_url
         self._interval = poll_interval_s
         self._lookback = initial_lookback_s
@@ -86,15 +90,22 @@ class TwitterApiIoPollingProvider:
         self._since: dict[str, int] = {}
         self._logged_shape = False
 
+    async def _current_handles(self) -> list[str]:
+        if self._handles_provider is not None:
+            return [h.lstrip("@") for h in (await self._handles_provider()) if h.strip()]
+        return self._static
+
     async def stream(self) -> AsyncIterator[RawPost]:
         if not self._api_key:
             raise RuntimeError("twitterapi.io API key not configured (NT_TWITTERAPI_IO_KEY)")
-        if not self._handles:
-            log.warning("watchlist is empty — set NT_WATCHLIST to comma-separated handles")
         fetch = self._fetch or self._http_fetch
-        log.info("polling %d accounts every %ds: %s", len(self._handles), self._interval, ", ".join(self._handles))
+        last_logged: list[str] | None = None
         while True:
-            for handle in self._handles:
+            handles = await self._current_handles()
+            if handles != last_logged:  # log only when the watchlist changes
+                log.info("watchlist: %d accounts: %s", len(handles), ", ".join(handles) or "(empty)")
+                last_logged = handles
+            for handle in handles:
                 try:
                     async for post in self._poll_handle(handle, fetch):
                         yield post

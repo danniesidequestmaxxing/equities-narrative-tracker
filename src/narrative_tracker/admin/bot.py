@@ -1,0 +1,27 @@
+"""aiogram admin-command listener (prod). Thin shell over commands.handle_command."""
+
+from __future__ import annotations
+
+import logging
+
+log = logging.getLogger(__name__)
+
+
+async def run_admin_bot(bot, sf, admin_ids: list[int]) -> None:  # pragma: no cover
+    from aiogram import Dispatcher
+    from aiogram.types import Message
+
+    from .commands import handle_command
+
+    dp = Dispatcher()
+
+    @dp.message()
+    async def _on_message(message: Message) -> None:
+        if not message.text or not message.text.startswith("/"):
+            return
+        from_id = message.from_user.id if message.from_user else 0
+        reply = await handle_command(message.text, from_id, sf, admin_ids)
+        await message.answer(reply)
+
+    log.info("admin command listener started (%d admin id(s))", len(admin_ids))
+    await dp.start_polling(bot, handle_signals=False)

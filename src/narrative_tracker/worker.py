@@ -233,9 +233,16 @@ async def main() -> None:  # pragma: no cover - prod entrypoint
     await create_all(engine)
     session_factory = build_sessionmaker(engine)
 
+    # Seed NT_WATCHLIST into the DB (idempotent). After this the watchlist is
+    # managed live via /addsource; the poller reads active handles each cycle.
+    for handle in settings.watchlist_handles:
+        await repo.get_or_create_account(
+            session_factory, platform_user_id=handle.lower(), handle=handle, tier="COLD"
+        )
+
     provider = TwitterApiIoPollingProvider(
         api_key=settings.twitterapi_io_key,
-        handles=settings.watchlist_handles,
+        handles_provider=lambda: repo.active_handles(session_factory),
         base_url=settings.twitterapi_io_base_url,
         poll_interval_s=settings.poll_interval_s,
         initial_lookback_s=settings.initial_lookback_s,
@@ -309,7 +316,17 @@ async def main() -> None:  # pragma: no cover - prod entrypoint
         scheduler=Scheduler(scheduled),
         heartbeat_url=settings.healthchecks_url,
     )
-    await worker.run()
+
+    # Live admin-command listener (/addsource etc.) alongside the worker.
+    from .admin.bot import run_admin_bot
+
+    admin_task = asyncio.create_task(run_admin_bot(bot, session_factory, settings.admin_id_list))
+    try:
+        await worker.run()
+    finally:
+        admin_task.cancel()
+        with contextlib.suppress(Exception):
+            await admin_task
 
 
 if __name__ == "__main__":  # pragma: no cover

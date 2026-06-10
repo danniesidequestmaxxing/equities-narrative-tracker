@@ -30,9 +30,17 @@ async def test_polling_parses_and_queries_correctly():
     assert "from:whale" in seen["query"] and seen["key"] == "k"
     assert len(posts) == 1
     assert posts[0].platform_post_id == "1"
-    assert posts[0].platform_user_id == "111"
+    assert posts[0].platform_user_id == "whale"  # keyed by handle (lowercased)
     assert posts[0].handle == "whale"
     assert "$NVDA" in posts[0].text
+
+
+async def test_handles_provider_is_used():
+    async def provider():
+        return ["@Alpha", "bravo"]
+
+    prov = TwitterApiIoPollingProvider(api_key="k", handles_provider=provider)
+    assert await prov._current_handles() == ["Alpha", "bravo"]
 
 
 async def test_polling_follows_pagination():
