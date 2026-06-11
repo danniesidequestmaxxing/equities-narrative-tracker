@@ -70,6 +70,21 @@ def tradingview_url(symbol: str) -> str:
     return f"https://www.tradingview.com/chart/?symbol={symbol}"
 
 
+def post_url(post: RawPost) -> str:
+    """Deep link to the exact post (falls back to the profile)."""
+    if post.handle and post.platform_post_id:
+        return f"https://x.com/{post.handle}/status/{post.platform_post_id}"
+    return f"https://x.com/{post.handle}" if post.handle else ""
+
+
+def _snippet(text: str, limit: int = 220) -> str:
+    flat = " ".join((text or "").split())
+    return flat if len(flat) <= limit else flat[: limit - 1] + "…"
+
+
+_POST_TYPE_TAG = {"reply": "↩️ reply · ", "retweet": "🔁 retweet · "}
+
+
 def _option_str(od: OptionDetail) -> str:
     if od.strike is not None:
         strike = int(od.strike) if od.strike == int(od.strike) else od.strike
@@ -80,28 +95,34 @@ def _option_str(od: OptionDetail) -> str:
 
 
 def build_alert(post: RawPost, mention: Mention) -> tuple[str, str]:
-    """Return ``(markdown_v2, plain)`` for a single ticker alert."""
+    """Return ``(markdown_v2, plain)`` for a single ticker alert.
+
+    Always quotes the post text and deep-links the exact post — every alert
+    carries its receipt, so a surprising ticker can be verified at a glance.
+    """
     symbol = mention.symbol
     tv = tradingview_url(symbol)
-    handle_url = f"https://x.com/{post.handle}" if post.handle else tv
+    link = post_url(post) or tv
     asset = mention.asset_class.value
     emoji = _STANCE_EMOJI.get(mention.stance, "\U0001f7e1")  # 🟡 default
     opt = f" {_option_str(mention.option_detail)}" if mention.option_detail else ""
     header = f"${symbol}{opt}"
+    type_tag = _POST_TYPE_TAG.get(post.post_type, "")
+    snippet = _snippet(post.text)
     mdv2 = (
         f"⚡ *{md(header)}* · {emoji} {md(mention.stance.value)} · {md(asset)}\n"
-        f"[{md('@' + (post.handle or 'source'))}]({md_url(handle_url)}) "
-        f"posted on `{md_code('$' + symbol)}`\n"
-        f"{md(post.posted_at.strftime('%H:%M ET'))}\n"
-        f"[\U0001f4c8 Chart]({md_url(tv)}) · {md('#' + symbol)}\n"
+        f"[{md('@' + (post.handle or 'source'))}]({md_url(link)}) · "
+        f"{md(type_tag)}{md(post.posted_at.strftime('%H:%M ET'))}\n"
+        f"“_{md(snippet)}_”\n"
+        f"[\U0001f517 Post]({md_url(link)}) · [\U0001f4c8 Chart]({md_url(tv)}) · {md('#' + symbol)}\n"
         f"\n"
         f"_Derived signal · not financial advice_"
     )
     plain = (
         f"[ALERT] ${symbol}{opt} {mention.stance.value} ({asset})\n"
-        f"@{post.handle or 'source'} posted on ${symbol} at "
-        f"{post.posted_at.strftime('%H:%M ET')}\n"
-        f"{tv}\n"
+        f"@{post.handle or 'source'} {type_tag}at {post.posted_at.strftime('%H:%M ET')}\n"
+        f'"{snippet}"\n'
+        f"{link}\n{tv}\n"
         f"Derived signal - not financial advice"
     )
     return mdv2, plain

@@ -70,3 +70,29 @@ async def test_polling_requires_api_key():
 def test_watchlist_handles_parsing():
     s = Settings(_env_file=None, watchlist=" blknoiz06, @elonmusk ,, macro_mike ")
     assert s.watchlist_handles == ["blknoiz06", "elonmusk", "macro_mike"]
+
+
+def test_to_rawpost_tags_replies_and_retweets():
+    # The $RDDT incident: a REPLY tweet (hidden from the profile timeline) fired
+    # an alert that looked unverifiable. Replies must be tagged as such.
+    from narrative_tracker.ingest.polling_client import _to_rawpost
+
+    reply = _to_rawpost({
+        "id": "2064943854068060238", "isReply": True, "inReplyToId": "2064",
+        "text": "@Ud197601 Everyone kept calling $AXTI a scam, and my thesis BS on $RDDT.",
+        "createdAt": "2026-06-11 05:32:34", "author": {"id": "9", "userName": "aleabitoreddit"},
+    })
+    assert reply.post_type == "reply"
+
+    # bare @-leading text still counts as a reply even without explicit flags
+    bare = _to_rawpost({"id": "2", "text": "@someone $HOOD all green",
+                        "createdAt": "2026-06-11 05:33:00", "author": {"userName": "a"}})
+    assert bare.post_type == "reply"
+
+    rt = _to_rawpost({"id": "3", "text": "RT @x: $NVDA", "retweeted_tweet": {"id": "9"},
+                      "createdAt": "2026-06-11 05:34:00", "author": {"userName": "a"}})
+    assert rt.post_type == "retweet"
+
+    orig = _to_rawpost({"id": "4", "text": "$NVDA breaking out",
+                        "createdAt": "2026-06-11 05:35:00", "author": {"userName": "a"}})
+    assert orig.post_type == "original"

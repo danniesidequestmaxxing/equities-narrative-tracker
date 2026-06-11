@@ -44,15 +44,29 @@ def _to_rawpost(tweet: dict) -> RawPost | None:
         for m in (tweet.get("extendedEntities", {}) or tweet.get("extended_entities", {})).get("media", []) or []
         if m.get("media_url_https") or m.get("media_url")
     ]
+    text = tweet.get("text") or tweet.get("full_text") or ""
+    if tweet.get("retweeted_tweet") or tweet.get("retweeted_status"):
+        post_type = "retweet"
+    elif (
+        tweet.get("isReply")
+        or tweet.get("inReplyToId")
+        or tweet.get("in_reply_to_status_id")
+        or tweet.get("in_reply_to_status_id_str")
+        or text.startswith("@")
+    ):
+        # Replies don't show on the profile timeline — tag them so alerts can say so.
+        post_type = "reply"
+    else:
+        post_type = "original"
     # Key accounts by handle (lowercased): it's what /addsource, the poller query,
     # and the tweet author all share — keeps tier + credibility coherent.
     return RawPost(
         platform_user_id=str(handle or user_id or "unknown").lower(),
         handle=handle,
         platform_post_id=str(post_id),
-        text=tweet.get("text") or tweet.get("full_text") or "",
+        text=text,
         posted_at=_parse_ts(tweet.get("createdAt") or tweet.get("created_at")),
-        post_type="retweet" if (tweet.get("retweeted_tweet") or tweet.get("retweeted_status")) else "original",
+        post_type=post_type,
         media_urls=media,
         raw=tweet,
     )
