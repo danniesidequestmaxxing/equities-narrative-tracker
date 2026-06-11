@@ -49,30 +49,37 @@ async def test_window_excludes_old_posts(session_factory):
     assert await analytics.hot_tickers(session_factory, since=tight) == []
 
 
-# --- watchlist-management security gate (the dashboard is public; writes must be token-gated) ---
+# --- open (public) watchlist management: anyone can add/remove; only input is validated ---
 
 import pytest
 
 fastapi = pytest.importorskip("fastapi")  # prod-only dep; skip where it's absent
 
 
-def test_check_token_disabled_when_unset(monkeypatch):
+def test_handle_regex_accepts_real_handles_and_rejects_junk():
     from narrative_tracker.api import dashboard
-    monkeypatch.setattr(dashboard._settings, "dashboard_token", None)
-    with pytest.raises(fastapi.HTTPException) as ei:
-        dashboard._check_token("anything")
-    assert ei.value.status_code == 403  # management off -> not even a guessable target
+    assert dashboard._HANDLE_RE.match("elonmusk")
+    assert dashboard._HANDLE_RE.match("a_b_123")
+    assert not dashboard._HANDLE_RE.match("has space")
+    assert not dashboard._HANDLE_RE.match("bad!char")
+    assert not dashboard._HANDLE_RE.match("waytoolong_handle")  # >15 chars
+    assert not dashboard._HANDLE_RE.match("")
 
 
-def test_check_token_rejects_wrong_token(monkeypatch):
+async def test_add_source_rejects_invalid_handle():
     from narrative_tracker.api import dashboard
-    monkeypatch.setattr(dashboard._settings, "dashboard_token", "s3cret")
-    with pytest.raises(fastapi.HTTPException) as ei:
-        dashboard._check_token("nope")
-    assert ei.value.status_code == 401
+    with pytest.raises(fastapi.HTTPException) as ei:  # raises before touching the DB
+        await dashboard.api_add_source(dashboard.SourceIn(handle="not a handle!", tier="HOT"))
+    assert ei.value.status_code == 400
 
 
-def test_check_token_accepts_correct_token(monkeypatch):
+async def test_public_add_list_remove_flow(session_factory, monkeypatch):
     from narrative_tracker.api import dashboard
-    monkeypatch.setattr(dashboard._settings, "dashboard_token", "s3cret")
-    dashboard._check_token("s3cret")  # no raise == authorized
+    monkeypatch.setattr(dashboard, "_sf", session_factory)
+    added = await dashboard.api_add_source(dashboard.SourceIn(handle="@NewWhale", tier="hot"))
+    assert added == {"ok": True, "handle": "newwhale", "tier": "HOT"}  # normalized, no token needed
+    listing = await dashboard.api_sources()
+    assert any(s["handle"] == "newwhale" and s["tier"] == "HOT" for s in listing["sources"])
+    removed = await dashboard.api_remove_source("NewWhale")
+    assert removed == {"ok": True}
+    assert not any(s["handle"] == "newwhale" for s in (await dashboard.api_sources())["sources"])

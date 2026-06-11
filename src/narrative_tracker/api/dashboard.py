@@ -1,14 +1,17 @@
-"""Web dashboard (read-only): ticker sentiment lookup + hot tickers.
+"""Web dashboard: ticker sentiment lookup, hot tickers, and an open watchlist.
 
 A FastAPI app + a single-page UI, served as a second Railway service reading the
-same Postgres. Prod-only (needs fastapi/uvicorn from the ``prod`` extra).
+same Postgres. Reads and watchlist writes are both public — anyone can add or
+remove tracked accounts (every change is audit-logged). Prod-only (needs
+fastapi/uvicorn from the ``prod`` extra).
 """
 
 from __future__ import annotations
 
+import re
 from datetime import datetime, timedelta, timezone
 
-from fastapi import FastAPI, Header, HTTPException
+from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
@@ -22,17 +25,14 @@ app = FastAPI(title="Narrative Tracker — Dashboard")
 _engine = build_engine(_settings.database_url)
 _sf = build_sessionmaker(_engine)
 
+# X handles: 1–15 chars, letters/digits/underscore. Validate so the public
+# add-box can't push junk into the poller's ``from:<handle>`` query.
+_HANDLE_RE = re.compile(r"^[A-Za-z0-9_]{1,15}$")
+
 
 class SourceIn(BaseModel):
     handle: str
     tier: str = "COLD"
-
-
-def _check_token(token: str | None) -> None:
-    if not _settings.dashboard_token:
-        raise HTTPException(403, "Watchlist management disabled — set NT_DASHBOARD_TOKEN on the web service.")
-    if token != _settings.dashboard_token:
-        raise HTTPException(401, "Invalid admin token.")
 
 
 def _since(hours: float) -> datetime:
@@ -56,17 +56,17 @@ async def api_ticker(symbol: str, hours: float = 24) -> dict:
 
 @app.get("/api/sources")
 async def api_sources() -> dict:
-    """Public read: the current watchlist + whether the UI can manage it."""
+    """The current watchlist. Public — anyone can read or change it."""
     sources = [s for s in await service.list_sources(_sf) if s["active"]]
-    return {"manageable": bool(_settings.dashboard_token), "sources": sources}
+    return {"sources": sources}
 
 
 @app.post("/api/sources")
-async def api_add_source(body: SourceIn, x_dashboard_token: str | None = Header(default=None)) -> dict:
-    _check_token(x_dashboard_token)
+async def api_add_source(body: SourceIn) -> dict:
+    """Add an account to track. Open to everyone; every add is audit-logged."""
     handle = body.handle.strip().lstrip("@").lower()
-    if not handle:
-        raise HTTPException(400, "handle is required")
+    if not _HANDLE_RE.match(handle):
+        raise HTTPException(400, "Enter a valid X handle — letters, digits or underscore, up to 15 chars.")
     tier = body.tier.upper()
     if tier not in ("HOT", "WARM", "COLD"):
         tier = "COLD"
@@ -75,8 +75,8 @@ async def api_add_source(body: SourceIn, x_dashboard_token: str | None = Header(
 
 
 @app.delete("/api/sources/{handle}")
-async def api_remove_source(handle: str, x_dashboard_token: str | None = Header(default=None)) -> dict:
-    _check_token(x_dashboard_token)
+async def api_remove_source(handle: str) -> dict:
+    """Stop tracking an account. Forward-only (history kept) and audit-logged."""
     removed = await service.remove_source(_sf, platform_user_id=handle.strip().lstrip("@").lower())
     return {"ok": removed}
 
@@ -124,7 +124,7 @@ tbody tr{cursor:pointer}tbody tr:hover{background:var(--panel2)}
 .pos{color:var(--green)}.neg{color:var(--red)}.neu{color:var(--yellow)}
 .srcadd{display:flex;gap:8px;padding:13px 16px;flex-wrap:wrap;align-items:center}
 .srcadd input,.srcadd select{background:#0b1219;border:1px solid var(--line);border-radius:8px;padding:8px 11px;color:var(--text);font-size:13px}
-.srcadd input#newh{width:180px}.srcadd input#tok{width:150px;margin-left:auto}
+.srcadd input#newh{width:230px}
 .srcadd button{background:var(--accent);color:#04121f;border:none;border-radius:8px;padding:8px 16px;font-weight:650;cursor:pointer}
 .srcnote{padding:2px 16px;color:var(--mut);font-size:12px;min-height:16px}
 .chips{display:flex;flex-wrap:wrap;gap:8px;padding:12px 16px}
@@ -141,11 +141,10 @@ tbody tr{cursor:pointer}tbody tr:hover{background:var(--panel2)}
 <main>
   <div class="card"><h2>🔥 Hot tickers</h2><div id="hot"><div class="empty">loading…</div></div></div>
   <div class="card"><h2 id="dtitle">Ticker detail</h2><div id="detail"><div class="empty">Click a ticker or search above.</div></div></div>
-  <div class="card" style="grid-column:1/-1"><h2>⚙️ Manage watchlist</h2>
+  <div class="card" style="grid-column:1/-1"><h2>📋 Watchlist — anyone can add or remove</h2>
     <div class="srcadd">
-      <input id="newh" placeholder="handle e.g. elonmusk" />
+      <input id="newh" placeholder="add an X handle e.g. elonmusk" />
       <select id="newt"><option>COLD</option><option>WARM</option><option>HOT</option></select>
-      <input id="tok" type="password" placeholder="admin token" />
       <button onclick="addSrc()">Add account</button>
     </div>
     <div class="srcnote" id="srcnote"></div>
@@ -190,29 +189,27 @@ async function loadTicker(sym){
 }
 function lookup(){const v=document.getElementById('q').value.trim().replace(/^\\$/,'').toUpperCase();if(v)loadTicker(v);}
 document.getElementById('q').addEventListener('keydown',e=>{if(e.key==='Enter')lookup();});
-function tok(){return document.getElementById('tok').value.trim();}
 function note(m){document.getElementById('srcnote').textContent=m;}
 async function loadSources(){
   const x=await (await fetch('/api/sources')).json();
-  note(x.manageable?'Adds go live on the worker within ~2 min.':'Read-only — set NT_DASHBOARD_TOKEN on the web service to manage accounts from here.');
+  note('Open to everyone — adds go live on the worker within ~2 min.');
   const l=document.getElementById('srclist');
-  if(!x.sources.length){l.innerHTML='<div class="empty">No accounts on the watchlist yet.</div>';return;}
+  if(!x.sources.length){l.innerHTML='<div class="empty">No accounts on the watchlist yet — add one above.</div>';return;}
   l.innerHTML=x.sources.map(s=>`<span class="chip"><span class="badge ${s.tier}">${s.tier}</span>@${esc(s.handle)}<button class="x" title="remove" onclick="rmSrc('${esc(s.handle)}')">×</button></span>`).join('');
 }
 async function addSrc(){
   const h=document.getElementById('newh').value.trim().replace(/^@/,''); const t=document.getElementById('newt').value;
   if(!h){note('Enter a handle first.');return;}
-  const r=await fetch('/api/sources',{method:'POST',headers:{'Content-Type':'application/json','X-Dashboard-Token':tok()},body:JSON.stringify({handle:h,tier:t})});
+  const r=await fetch('/api/sources',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({handle:h,tier:t})});
   if(r.ok){document.getElementById('newh').value='';note(`Added @${h} (${t}). Live on the worker within ~2 min.`);loadSources();}
   else{const e=await r.json().catch(()=>({}));note('⚠️ '+(e.detail||('HTTP '+r.status)));}
 }
 async function rmSrc(h){
-  const r=await fetch('/api/sources/'+encodeURIComponent(h),{method:'DELETE',headers:{'X-Dashboard-Token':tok()}});
+  if(!confirm('Stop tracking @'+h+'? Anyone can re-add it later.'))return;
+  const r=await fetch('/api/sources/'+encodeURIComponent(h),{method:'DELETE'});
   if(r.ok){note(`Removed @${h} — the worker stops polling it next cycle.`);loadSources();}
   else{const e=await r.json().catch(()=>({}));note('⚠️ '+(e.detail||('HTTP '+r.status)));}
 }
-const tokEl=document.getElementById('tok'); tokEl.value=localStorage.getItem('nt_tok')||'';
-tokEl.addEventListener('input',()=>localStorage.setItem('nt_tok',tokEl.value.trim()));
 document.getElementById('newh').addEventListener('keydown',e=>{if(e.key==='Enter')addSrc();});
 setTf(); refresh(); loadSources(); setInterval(()=>{refresh(); loadSources(); if(CUR)loadTicker(CUR);}, 60000);
 </script></body></html>"""
