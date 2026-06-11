@@ -169,22 +169,28 @@ async def run_outcomes(
         if throttle_s:
             await asyncio.sleep(throttle_s)
 
+    # The benchmark is central to the edge metric — without it, rows would be
+    # marked complete benchless forever. Defer mention outcomes to the next
+    # cycle (e.g. boot-time 429 bursts on the free tier) rather than degrade.
     bench_bars = bars_by.get(benchmark)
     computed = 0
-    for m in pend:
-        bars = bars_by.get(m["symbol"])
-        if not bars:
-            continue
-        out = outcomes_math.forward_returns(bars, m["posted_at"])
-        if out is None:
-            continue  # post newer than the latest close; try again next run
-        bench = outcomes_math.forward_returns(bench_bars, m["posted_at"]) if bench_bars else None
-        await db_outcomes.upsert_outcome(
-            sf, mention_id=m["mention_id"], account_id=m["account_id"], symbol=m["symbol"],
-            stance=m["stance"], posted_at=m["posted_at"], px_post=out["px_post"],
-            fwd=out["fwd"], bench=(bench or {}).get("fwd"),
-        )
-        computed += 1
+    if bench_bars is None:
+        log.warning("outcomes: benchmark %s bars unavailable; deferring mention outcomes", benchmark)
+    else:
+        for m in pend:
+            bars = bars_by.get(m["symbol"])
+            if not bars:
+                continue
+            out = outcomes_math.forward_returns(bars, m["posted_at"])
+            if out is None:
+                continue  # post newer than the latest close; try again next run
+            bench = outcomes_math.forward_returns(bench_bars, m["posted_at"])
+            await db_outcomes.upsert_outcome(
+                sf, mention_id=m["mention_id"], account_id=m["account_id"], symbol=m["symbol"],
+                stance=m["stance"], posted_at=m["posted_at"], px_post=out["px_post"],
+                fwd=out["fwd"], bench=(bench or {}).get("fwd"),
+            )
+            computed += 1
 
     # M9-C: grade open stated calls against the same bars — which came first,
     # their stop, their target, or the timeout?

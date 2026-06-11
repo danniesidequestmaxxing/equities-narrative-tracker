@@ -152,3 +152,16 @@ async def test_scoreboard_commands_end_to_end(session_factory):
 async def test_scoreboard_empty_state(session_factory):
     msg = await handle_command("/scoreboard", 999, session_factory, ADMIN)
     assert "No scored mentions yet" in msg
+
+
+async def test_run_outcomes_defers_when_benchmark_unavailable(session_factory):
+    class NoSpy(FakeMarket):
+        async def fetch_bars(self, symbol, *, days=150, adjusted=False):
+            if symbol == "SPY":
+                raise RuntimeError("429")
+            return await super().fetch_bars(symbol, days=days, adjusted=adjusted)
+
+    await _seed_mentions(session_factory)
+    out = await jobs.run_outcomes(session_factory, NoSpy(), now=D0 + timedelta(days=11))
+    assert out["computed"] == 0  # deferred, not degraded
+    assert await db_outcomes.outcomes_for_accounts(session_factory, since=D0) == []
