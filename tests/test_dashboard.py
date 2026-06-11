@@ -47,3 +47,32 @@ async def test_window_excludes_old_posts(session_factory):
     await _seed(session_factory)
     tight = NOW - timedelta(minutes=1)  # posts are 5-10 min old -> excluded
     assert await analytics.hot_tickers(session_factory, since=tight) == []
+
+
+# --- watchlist-management security gate (the dashboard is public; writes must be token-gated) ---
+
+import pytest
+
+fastapi = pytest.importorskip("fastapi")  # prod-only dep; skip where it's absent
+
+
+def test_check_token_disabled_when_unset(monkeypatch):
+    from narrative_tracker.api import dashboard
+    monkeypatch.setattr(dashboard._settings, "dashboard_token", None)
+    with pytest.raises(fastapi.HTTPException) as ei:
+        dashboard._check_token("anything")
+    assert ei.value.status_code == 403  # management off -> not even a guessable target
+
+
+def test_check_token_rejects_wrong_token(monkeypatch):
+    from narrative_tracker.api import dashboard
+    monkeypatch.setattr(dashboard._settings, "dashboard_token", "s3cret")
+    with pytest.raises(fastapi.HTTPException) as ei:
+        dashboard._check_token("nope")
+    assert ei.value.status_code == 401
+
+
+def test_check_token_accepts_correct_token(monkeypatch):
+    from narrative_tracker.api import dashboard
+    monkeypatch.setattr(dashboard._settings, "dashboard_token", "s3cret")
+    dashboard._check_token("s3cret")  # no raise == authorized

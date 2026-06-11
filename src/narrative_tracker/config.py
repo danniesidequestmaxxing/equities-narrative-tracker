@@ -43,6 +43,10 @@ class Settings(BaseSettings):
     # Default ON — flip to false only after a paper-trading period proves accuracy.
     paper_trade: bool = True
 
+    # Dashboard write-token: required to add/remove accounts from the web UI.
+    # Unset -> watchlist management from the dashboard is disabled (read-only).
+    dashboard_token: str | None = None
+
     # LLM (stance / extraction). Empty -> deterministic rule-based fallback only.
     llm_model: str | None = None          # e.g. "openai/gpt-5.2", "anthropic/claude-opus-4-8"
     llm_budget_usd: float = 100.0
