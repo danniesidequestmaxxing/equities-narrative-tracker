@@ -155,7 +155,8 @@ async def _add_account(sf, handle: str, tier_word: str | None) -> str:
         return "Usage: @handle [hot|warm|cold]"
     tier = tier_word.upper() if tier_word and tier_word.upper() in _TIERS else "COLD"
     await service.add_source(sf, platform_user_id=handle, handle=handle, tier=tier)
-    return f"✅ Watching @{handle} ({tier}). Polling picks it up within ~2 min."
+    return (f"✅ Watching @{handle} ({tier}) on X. Polling picks it up within ~2 min.\n"
+            f"(Meant a Telegram channel? Send its t.me/{handle} link instead.)")
 
 
 _TG_LINK_RE = re.compile(r"(?:https?://)?t\.me/(?:s/)?(?P<name>[A-Za-z0-9_]{4,32})/?$")
