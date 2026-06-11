@@ -8,15 +8,18 @@ all respect the kill switch / pause state.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
+from .analyze import outcomes as outcomes_math
 from .analyze import pulse as pulse_mod
 from .analyze.analyzer import Analyzer
 from .analyze.narratives import assign_narratives
 from .analyze.technicals import snapshot_from_bars
 from .db import analytics, recs, repo
+from .db import outcomes as db_outcomes
 from .enrich.market_data import MarketDataProvider
 from .extract.symbology import classify_symbol
 from .notify.telegram_bot import AlertNotifier
@@ -132,6 +135,55 @@ async def run_pulse(
         "tickers": len({r["symbol"] for r in window}), "deep_dives": len(deep_dives),
         "llm": brief is not None, "early": [e["symbol"] for e in early],
     }
+
+
+async def run_outcomes(
+    sf, market, *, now: datetime, benchmark: str = "SPY", lookback_days: int = 45,
+    bars_days: int = 150, throttle_s: float = 0.0, source: str = "massive-adj",
+) -> dict:
+    """M9 event-study: refresh split-adjusted bars for every mentioned symbol
+    (+ the benchmark) and (re)compute forward returns for each mention until
+    complete. Backfills the whole stored history the first time it runs.
+
+    One bars fetch per symbol per run; ``throttle_s`` keeps the free data tier
+    happy. Symbols whose bars can't be fetched are skipped and retried next run.
+    """
+    from .db import bars as db_bars
+
+    pend = await db_outcomes.mentions_needing_outcomes(sf, since=now - timedelta(days=lookback_days))
+    if not pend:
+        return {"computed": 0, "pending": 0, "symbols": 0}
+
+    symbols = sorted({m["symbol"] for m in pend})
+    bars_by: dict[str, list[dict]] = {}
+    for sym in [benchmark, *symbols]:
+        try:
+            bars = await market.fetch_bars(sym, days=bars_days, adjusted=True)
+            if bars:
+                bars_by[sym] = bars
+                await db_bars.save_bars(sf, symbol=sym, interval="1d", source=source, bars=bars)
+        except Exception as exc:  # noqa: BLE001 - one symbol must not kill the run
+            log.warning("outcomes: bars fetch failed for %s: %s", sym, exc)
+        if throttle_s:
+            await asyncio.sleep(throttle_s)
+
+    bench_bars = bars_by.get(benchmark)
+    computed = 0
+    for m in pend:
+        bars = bars_by.get(m["symbol"])
+        if not bars:
+            continue
+        out = outcomes_math.forward_returns(bars, m["posted_at"])
+        if out is None:
+            continue  # post newer than the latest close; try again next run
+        bench = outcomes_math.forward_returns(bench_bars, m["posted_at"]) if bench_bars else None
+        await db_outcomes.upsert_outcome(
+            sf, mention_id=m["mention_id"], account_id=m["account_id"], symbol=m["symbol"],
+            stance=m["stance"], posted_at=m["posted_at"], px_post=out["px_post"],
+            fwd=out["fwd"], bench=(bench or {}).get("fwd"),
+        )
+        computed += 1
+    return {"computed": computed, "pending": len(pend) - computed, "symbols": len(symbols)}
 
 
 def _recommend_inputs(analyzer: Analyzer, now_ts: float, config: RiskConfig) -> list[dict]:

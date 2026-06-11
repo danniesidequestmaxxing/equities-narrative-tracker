@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
-from ..db import analytics, repo
+from ..db import analytics, repo, scoreboard
 from . import service
 
 HELP = (
@@ -27,9 +27,59 @@ HELP = (
     "/addsource <handle> [tier=HOT|WARM|COLD]\n"
     "/rmsource <handle> · /tier <handle> <TIER>\n"
     "/sources · /watch <sym> · /unwatch <sym> · /watching\n"
+    "/scoreboard [days] — who's actually right\n"
+    "/account <handle> [days] — one account's record\n"
     "/pause [broadcast|full] · /resume\n"
     "/kill · /unkill · /status"
 )
+
+
+def _pct(v: float | None) -> str:
+    return "—" if v is None else f"{v * 100:+.1f}%"
+
+
+def _fmt_scoreboard(board: dict, days: int) -> str:
+    lines = [f"\U0001F3C6 Scoreboard — last {days}d, edge vs SPY (3-day horizon)"]
+    if not board["ranked"] and not board["thin"]:
+        return ("No scored mentions yet. Outcomes are computed from daily closes, "
+                "so fresh mentions need 1-5 trading days to grade. Check back tomorrow.")
+    for i, a in enumerate(board["ranked"], 1):
+        hit = f"{a['hit_3d'] * 100:.0f}%" if a["hit_3d"] is not None else "—"
+        lines.append(
+            f"{i}. @{a['handle']} ({a['tier']}) · n={a['n']} · hit {hit} · "
+            f"avg {_pct(a['avg_3d'])} (1d {_pct(a['avg_1d'])} / 5d {_pct(a['avg_5d'])})"
+        )
+    if board["thin"]:
+        thin = ", ".join(f"@{a['handle']} (n={a['n']})" for a in board["thin"])
+        lines.append(f"thin sample, not ranked: {thin}")
+    lines.append("Edge = benchmark-adjusted move in the direction they called. Not financial advice.")
+    return "\n".join(lines)
+
+
+def _fmt_account(detail: dict, days: int) -> str:
+    s = detail["stats"]
+    if s is None:
+        return (f"No scored mentions for @{detail['handle']} in the last {days}d. "
+                "Either they were quiet, or their mentions are <1 trading day old.")
+    hit = f"{s['hit_3d'] * 100:.0f}%" if s["hit_3d"] is not None else "—"
+    lines = [
+        f"@{s['handle']} · {s['tier']} · last {days}d",
+        f"scored mentions: {s['n']} · hit {hit} (3d) · "
+        f"avg edge {_pct(s['avg_3d'])} (1d {_pct(s['avg_1d'])} / 5d {_pct(s['avg_5d'])})",
+    ]
+    if s["best"]:
+        lines.append(f"best: ${s['best']['symbol']} {_pct(s['best']['edge'])} · "
+                     f"worst: ${s['worst']['symbol']} {_pct(s['worst']['edge'])}")
+    if detail["recent"]:
+        lines.append("recent:")
+        for t in detail["recent"]:
+            dot = _STANCE_DOT.get(t["stance"], "⚪")
+            when = t["posted_at"].strftime("%m-%d") if t["posted_at"] else ""
+            edge = _pct(t["edge_3d"]) if t["edge_3d"] is not None else "pending"
+            lines.append(f"{dot} ${t['symbol']} {when} → {edge}")
+    if s["n"] < 5:
+        lines.append("⚠️ small sample — treat as anecdote, not statistics.")
+    return "\n".join(lines)
 
 _TIERS = ("HOT", "WARM", "COLD")
 
@@ -185,6 +235,22 @@ async def handle_command(text: str, from_id: int, sf, admin_ids: list[int], *, m
             if not watched:
                 return "Ticker watchlist is empty. Add one: $NVDA watch"
             return "🔔 Watching: " + " ".join("$" + s for s in watched)
+
+        if cmd == "scoreboard":
+            days = int(args[0]) if args and args[0].isdigit() else 30
+            board = await scoreboard.account_scoreboard(
+                sf, since=datetime.now(timezone.utc) - timedelta(days=days)
+            )
+            return _fmt_scoreboard(board, days)
+
+        if cmd == "account":
+            if not args:
+                return "Usage: /account <handle> [days]"
+            days = int(args[1]) if len(args) > 1 and args[1].isdigit() else 60
+            detail = await scoreboard.account_detail(
+                sf, handle=args[0], since=datetime.now(timezone.utc) - timedelta(days=days)
+            )
+            return _fmt_account(detail, days)
 
         if cmd == "pause":
             mode = killswitch.PAUSE_FULL if (args and args[0].lower() == "full") else killswitch.PAUSE_BROADCAST

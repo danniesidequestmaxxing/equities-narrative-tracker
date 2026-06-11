@@ -129,6 +129,33 @@ class AuditLog(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
 
 
+class MentionOutcome(Base):
+    """M9: what the market did after a mention — the event-study row.
+
+    Forward returns are computed from split-adjusted daily closes, anchored at
+    the first close on/after the post date, alongside the benchmark (SPY) over
+    the same windows. Rows are created as soon as an anchor close exists and
+    re-completed nightly until fwd_5d fills in.
+    """
+
+    __tablename__ = "mention_outcomes"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    mention_id: Mapped[int] = mapped_column(ForeignKey("ticker_mentions.id"), unique=True, index=True)
+    account_id: Mapped[int] = mapped_column(ForeignKey("accounts.id"), index=True)
+    symbol: Mapped[str] = mapped_column(String(24), index=True)
+    stance: Mapped[str] = mapped_column(String(8), default="neutral")
+    posted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    px_post: Mapped[float] = mapped_column(Float)
+    fwd_1d: Mapped[float | None] = mapped_column(Float, nullable=True)
+    fwd_3d: Mapped[float | None] = mapped_column(Float, nullable=True)
+    fwd_5d: Mapped[float | None] = mapped_column(Float, nullable=True)
+    bench_1d: Mapped[float | None] = mapped_column(Float, nullable=True)
+    bench_3d: Mapped[float | None] = mapped_column(Float, nullable=True)
+    bench_5d: Mapped[float | None] = mapped_column(Float, nullable=True)
+    computed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+
 class WatchedTicker(Base):
     """User's per-ticker watchlist: 🔔 on alerts + always in the pulse deep-dive."""
 

@@ -17,7 +17,7 @@ from pydantic import BaseModel
 
 from ..admin import service
 from ..config import get_settings
-from ..db import analytics
+from ..db import analytics, scoreboard
 from ..db.base import build_engine, build_sessionmaker
 
 _settings = get_settings()
@@ -52,6 +52,12 @@ async def api_hot(hours: float = 24, limit: int = 25) -> list[dict]:
 @app.get("/api/ticker/{symbol}")
 async def api_ticker(symbol: str, hours: float = 24) -> dict:
     return await analytics.ticker_detail(_sf, symbol=symbol.upper().lstrip("$"), since=_since(hours))
+
+
+@app.get("/api/scoreboard")
+async def api_scoreboard(days: float = 30) -> dict:
+    """Per-account edge stats (M9): direction-signed, SPY-adjusted forward returns."""
+    return await scoreboard.account_scoreboard(_sf, since=_since(days * 24))
 
 
 @app.get("/api/sources")
@@ -141,6 +147,9 @@ tbody tr{cursor:pointer}tbody tr:hover{background:var(--panel2)}
 <main>
   <div class="card"><h2>🔥 Hot tickers</h2><div id="hot"><div class="empty">loading…</div></div></div>
   <div class="card"><h2 id="dtitle">Ticker detail</h2><div id="detail"><div class="empty">Click a ticker or search above.</div></div></div>
+  <div class="card" style="grid-column:1/-1"><h2>🏆 Account scoreboard — edge vs SPY, last 30d</h2>
+    <div id="board"><div class="empty">loading…</div></div>
+  </div>
   <div class="card" style="grid-column:1/-1"><h2>📋 Watchlist — anyone can add or remove</h2>
     <div class="srcadd">
       <input id="newh" placeholder="add an X handle e.g. elonmusk" />
@@ -190,6 +199,21 @@ async function loadTicker(sym){
 function lookup(){const v=document.getElementById('q').value.trim().replace(/^\\$/,'').toUpperCase();if(v)loadTicker(v);}
 document.getElementById('q').addEventListener('keydown',e=>{if(e.key==='Enter')lookup();});
 function note(m){document.getElementById('srcnote').textContent=m;}
+async function loadBoard(){
+  const x=await (await fetch('/api/scoreboard?days=30')).json();
+  const b=document.getElementById('board');
+  const pc=v=>v==null?'—':((v>0?'+':'')+(v*100).toFixed(1)+'%');
+  if(!x.ranked.length&&!x.thin.length){b.innerHTML='<div class="empty">No graded mentions yet — outcomes need 1–5 trading days of closes to score.</div>';return;}
+  const rows=x.ranked.map((a,i)=>`<tr><td class="mut">${i+1}</td>
+   <td><span class="badge ${a.tier}">${a.tier}</span> @${esc(a.handle)}</td>
+   <td>${a.n}</td><td>${a.hit_3d==null?'—':Math.round(a.hit_3d*100)+'%'}</td>
+   <td class="${a.avg_3d>0?'pos':a.avg_3d<0?'neg':'neu'}">${pc(a.avg_3d)}</td>
+   <td class="mut">${pc(a.avg_1d)} / ${pc(a.avg_5d)}</td>
+   <td class="mut">${a.best?('$'+esc(a.best.symbol)+' '+pc(a.best.edge)):'—'}</td></tr>`).join('');
+  b.innerHTML=`<table><thead><tr><th>#</th><th>Account</th><th>n</th><th>Hit 3d</th><th>Avg edge 3d</th><th>1d / 5d</th><th>Best call</th></tr></thead><tbody>${rows}</tbody></table>`+
+   (x.thin.length?`<div class="srcnote">thin sample, not ranked: ${x.thin.map(a=>'@'+esc(a.handle)+' (n='+a.n+')').join(', ')}</div>`:'')+
+   `<div class="srcnote">Edge = SPY-adjusted move in the called direction, 3 trading days after the mention.</div>`;
+}
 async function loadSources(){
   const x=await (await fetch('/api/sources')).json();
   note('Open to everyone — adds go live on the worker within ~2 min.');
@@ -211,5 +235,5 @@ async function rmSrc(h){
   else{const e=await r.json().catch(()=>({}));note('⚠️ '+(e.detail||('HTTP '+r.status)));}
 }
 document.getElementById('newh').addEventListener('keydown',e=>{if(e.key==='Enter')addSrc();});
-setTf(); refresh(); loadSources(); setInterval(()=>{refresh(); loadSources(); if(CUR)loadTicker(CUR);}, 60000);
+setTf(); refresh(); loadSources(); loadBoard(); setInterval(()=>{refresh(); loadSources(); loadBoard(); if(CUR)loadTicker(CUR);}, 60000);
 </script></body></html>"""

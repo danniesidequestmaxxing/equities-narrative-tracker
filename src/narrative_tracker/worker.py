@@ -312,6 +312,14 @@ async def main() -> None:  # pragma: no cover - prod entrypoint
             )
 
         scheduled.append(ScheduledJob("refresh-score", 86400.0, _refresh_and_score))
+
+        # M9 event-study: forward returns after every mention (backfills history
+        # on first run; re-completes partial rows each cycle). Throttled for the
+        # free Massive tier (~5 req/min).
+        scheduled.append(ScheduledJob(
+            "outcomes", 6 * 3600.0,
+            lambda now: cadence.run_outcomes(session_factory, market, now=now, throttle_s=13.0),
+        ))
     else:
         log.warning("market data provider not configured; recommend + scoring disabled")
 
