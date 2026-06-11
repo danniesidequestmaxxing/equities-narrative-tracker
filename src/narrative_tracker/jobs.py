@@ -336,10 +336,22 @@ def _horizon_days(raw: str | None) -> int:
     return horizon_days(raw)
 
 
+# Friday 21:00 UTC = Saturday 05:00 in Malaysia (no DST) = right after the
+# Friday US close — the user's "Friday after trading hours" anchor.
+WEEKLY_DUE_UTC_HOUR = 21
+
+
+def weekly_report_due(now: datetime) -> bool:
+    """True from Friday 21:00 UTC through the end of Saturday (UTC). The wide
+    window means a worker that was down at the exact hour still catches up;
+    the per-ISO-week idempotency key prevents repeats."""
+    return (now.weekday() == 4 and now.hour >= WEEKLY_DUE_UTC_HOUR) or now.weekday() == 5
+
+
 async def run_weekly_report(sf, notifier: AlertNotifier, *, now: datetime) -> dict:
-    """M11: the Sunday ritual — who was right this week, which stated calls
-    graded, what ran hottest. One idempotent broadcast per ISO week; silent
-    when there is nothing to report yet."""
+    """M11: the Friday-close report — who was right this week, which stated
+    calls graded, what ran hottest. One idempotent broadcast per ISO week;
+    silent when there is nothing to report yet."""
     from .db import scoreboard as db_scoreboard
 
     if await killswitch.is_killed(sf) or await killswitch.get_pause(sf) != killswitch.PAUSE_NONE:
@@ -391,7 +403,9 @@ async def run_weekly_report(sf, notifier: AlertNotifier, *, now: datetime) -> di
         + "\nHot: " + ", ".join(f"${t['symbol']}" for t in hot)
     )
     sent = await notifier.broadcast_text(
-        idempotency_key=f"WEEKLY:{iso.year}-W{iso.week}", mdv2=mdv2, plain=plain
+        # FRI-keyed: the cadence changed to Friday-close editions; the new key
+        # space means an old boot-time send can never block this week's report.
+        idempotency_key=f"WEEKLYFRI:{iso.year}-W{iso.week}", mdv2=mdv2, plain=plain
     )
     return {"broadcast": sent, "ranked": len(board["ranked"]), "graded": len(graded)}
 

@@ -41,6 +41,10 @@ log = logging.getLogger(__name__)
 _DEFAULT_PIPELINE = ExtractionPipeline()
 
 
+async def _noop() -> None:
+    return None
+
+
 async def process_post(
     post: RawPost,
     *,
@@ -324,10 +328,16 @@ async def main() -> None:  # pragma: no cover - prod entrypoint
                 now_ts=now.timestamp(),
             ),
         ),
-        # M11: the Sunday ritual (idempotent per ISO week; silent when empty).
+        # M11: weekly report, anchored to the Friday US close (Fri 21:00 UTC
+        # = Sat 05:00 MYT). Checked every 10 min; the window + per-week
+        # idempotency make it fire exactly once, even across restarts.
         ScheduledJob(
-            "weekly-report", 7 * 86400.0,
-            lambda now: cadence.run_weekly_report(session_factory, notifier, now=now),
+            "weekly-report", 600.0,
+            lambda now: (
+                cadence.run_weekly_report(session_factory, notifier, now=now)
+                if cadence.weekly_report_due(now)
+                else _noop()
+            ),
         ),
     ]
     if settings.polygon_api_key:  # pragma: no cover

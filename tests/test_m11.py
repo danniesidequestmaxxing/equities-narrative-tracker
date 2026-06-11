@@ -149,3 +149,19 @@ async def test_weekly_report_silent_with_no_data(session_factory, fake_bot):
     notifier = AlertNotifier(bot=fake_bot, session_factory=session_factory, trading_chat_id=7)
     out = await jobs.run_weekly_report(session_factory, notifier, now=T0)
     assert out == {"skipped": "no_data"} and fake_bot.sent == []
+
+
+def test_weekly_report_due_window():
+    from narrative_tracker.jobs import weekly_report_due
+
+    # 2026-06-12 is a Friday; 21:00 UTC == 05:00 Saturday in Malaysia (UTC+8)
+    fri = datetime(2026, 6, 12, tzinfo=timezone.utc)
+    assert weekly_report_due(fri.replace(hour=20, minute=59)) is False  # market just closed
+    assert weekly_report_due(fri.replace(hour=21)) is True              # 5am MYT
+    assert weekly_report_due(fri.replace(hour=23, minute=30)) is True
+    sat = datetime(2026, 6, 13, 10, 0, tzinfo=timezone.utc)
+    assert weekly_report_due(sat) is True    # catch-up window after a restart
+    sun = datetime(2026, 6, 14, 21, 0, tzinfo=timezone.utc)
+    assert weekly_report_due(sun) is False
+    wed = datetime(2026, 6, 10, 21, 0, tzinfo=timezone.utc)
+    assert weekly_report_due(wed) is False
