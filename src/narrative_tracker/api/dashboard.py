@@ -75,10 +75,17 @@ async def api_sources() -> dict:
 
 @app.post("/api/sources")
 async def api_add_source(body: SourceIn) -> dict:
-    """Add an account to track. Open to everyone; every add is audit-logged."""
+    """Add an account to track. Open to everyone; every add is audit-logged.
+    Capped (M12) so strangers can't run up the polling + LLM bill — the owner
+    can add beyond the cap via the Telegram bot, or raise NT_MAX_WATCHLIST."""
     handle = body.handle.strip().lstrip("@").lower()
     if not _HANDLE_RE.match(handle):
         raise HTTPException(400, "Enter a valid X handle — letters, digits or underscore, up to 15 chars.")
+    active = [s for s in await service.list_sources(_sf) if s["active"]]
+    if len(active) >= _settings.max_watchlist and handle not in {s["handle"].lower() for s in active}:
+        raise HTTPException(
+            409, f"Watchlist is full ({_settings.max_watchlist} accounts) — each one costs polling credits. "
+                 "The owner can remove one or raise the cap.")
     tier = body.tier.upper()
     if tier not in ("HOT", "WARM", "COLD"):
         tier = "COLD"

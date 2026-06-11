@@ -67,13 +67,16 @@ class LlmRelevanceGate:
 
 
 def build_llm_relevance_infer(
-    model: str,
+    model: str, budget=None,
 ) -> Callable[[str, list[str]], Awaitable[RelevanceVerdict]]:  # pragma: no cover
     """Wire the async LLM inference via instructor (same plumbing as stance)."""
 
     async def infer(text: str, symbols: list[str]) -> RelevanceVerdict:
         import instructor  # lazy: part of the `prod` extra
 
+        from ..ops.llm_budget import consume_or_raise
+
+        consume_or_raise(budget)  # over budget -> raise -> pipeline keeps mentions
         client = instructor.from_provider(model, async_client=True)
         return await client.chat.completions.create(
             response_model=RelevanceVerdict,
@@ -91,8 +94,8 @@ def build_llm_relevance_infer(
     return infer
 
 
-def build_relevance_gate(*, model: str | None = None) -> RelevanceGate | None:
+def build_relevance_gate(*, model: str | None = None, budget=None) -> RelevanceGate | None:
     """LLM gate when a model is configured; None (no gating) otherwise."""
     if not model:
         return None
-    return LlmRelevanceGate(infer=build_llm_relevance_infer(model))
+    return LlmRelevanceGate(infer=build_llm_relevance_infer(model, budget))

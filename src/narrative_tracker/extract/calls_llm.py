@@ -70,7 +70,7 @@ def horizon_days(raw: str | None) -> int:
     return 10
 
 
-def build_call_extractor(model: str | None) -> CallExtractor | None:  # pragma: no cover
+def build_call_extractor(model: str | None, budget=None) -> CallExtractor | None:  # pragma: no cover
     """LLM extractor via instructor (same plumbing as stance/relevance)."""
     if not model:
         return None
@@ -78,6 +78,9 @@ def build_call_extractor(model: str | None) -> CallExtractor | None:  # pragma: 
     async def extract(text: str) -> CallExtraction:
         import instructor  # lazy: part of the `prod` extra
 
+        from ..ops.llm_budget import consume_or_raise
+
+        consume_or_raise(budget)  # over budget -> raise -> post retried tomorrow
         client = instructor.from_provider(model, async_client=True)
         return await client.chat.completions.create(
             response_model=CallExtraction,

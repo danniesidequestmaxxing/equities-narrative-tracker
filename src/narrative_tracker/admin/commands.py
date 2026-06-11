@@ -30,6 +30,7 @@ HELP = (
     "/sources · /watch <sym> · /unwatch <sym> · /watching\n"
     "/scoreboard [days] — who's actually right\n"
     "/account <handle> [days] — one account's record\n"
+    "/export — zip of the ledger (backup)\n"
     "/pause [broadcast|full] · /resume\n"
     "/kill · /unkill · /status"
 )

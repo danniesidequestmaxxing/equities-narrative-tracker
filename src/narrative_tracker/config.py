@@ -52,6 +52,14 @@ class Settings(BaseSettings):
     # LLM (stance / extraction). Empty -> deterministic rule-based fallback only.
     llm_model: str | None = None          # e.g. "openai/gpt-5.2", "anthropic/claude-opus-4-8"
     llm_budget_usd: float = 100.0
+    # Hard daily cap on LLM calls across all surfaces (cost guardrail for the
+    # public watchlist). Hitting it degrades to rule-based until UTC midnight.
+    # 0 = uncapped.
+    llm_daily_call_cap: int = 2000
+
+    # Public dashboard can add accounts; cap the list so strangers can't run up
+    # the polling + LLM bill. Owner adds via the bot bypass the cap.
+    max_watchlist: int = 25
 
     # Observability.
     healthchecks_url: str | None = None

@@ -140,7 +140,7 @@ def _to_mentions(read: "VisionRead", *, source_post_id: str, min_confidence: flo
     return out
 
 
-def build_llm_vision(model: str | None):  # pragma: no cover - prod wiring
+def build_llm_vision(model: str | None, daily_budget=None):  # pragma: no cover - prod wiring
     """Multimodal LLM vision extractor via instructor; None when no model."""
     if not model:
         return None
@@ -149,6 +149,9 @@ def build_llm_vision(model: str | None):  # pragma: no cover - prod wiring
         async def extract(self, image_url: str, *, source_post_id: str = "") -> list[Mention]:
             import instructor  # lazy: part of the `prod` extra
 
+            from ..ops.llm_budget import consume_or_raise
+
+            consume_or_raise(daily_budget)  # over budget -> raise -> vision skipped
             client = instructor.from_provider(model, async_client=True)
             read = await client.chat.completions.create(
                 response_model=VisionRead,

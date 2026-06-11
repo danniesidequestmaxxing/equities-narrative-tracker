@@ -336,6 +336,45 @@ def _horizon_days(raw: str | None) -> int:
     return horizon_days(raw)
 
 
+async def run_ops_report(
+    sf, notifier: AlertNotifier, *, now: datetime, killswitch_state: bool | None = None,
+    llm_budget=None,
+) -> dict:
+    """M12 daily ops line: proves the system is alive and surfaces silent
+    failures — a flat 'ZERO posts ingested' is how exhausted twitterapi
+    credits get caught the same day instead of next week. One per UTC date."""
+    from .db import ops_stats
+
+    snap = await ops_stats.snapshot(sf, since=now - timedelta(hours=24))
+    killed = await killswitch.is_killed(sf)
+    pause = await killswitch.get_pause(sf)
+
+    alarm = ""
+    if snap["posts"] == 0:
+        alarm = "⚠️ ZERO posts ingested in 24h — accounts quiet, or twitterapi credits exhausted. Check /status and the twitterapi.io balance.\n"
+    if killed:
+        alarm += "🛑 kill switch is ENGAGED.\n"
+    elif pause != killswitch.PAUSE_NONE:
+        alarm += f"⏸ paused ({pause}).\n"
+
+    budget_txt = ""
+    if llm_budget is not None:
+        b = llm_budget.snapshot()
+        budget_txt = f" · LLM {b['used']}/{b['limit'] or '∞'}"
+
+    line = (
+        f"{snap['posts']} posts · {snap['mentions']} mentions · {snap['sent']} sends · "
+        f"{snap['outcomes']} graded · {snap['stated']} stated calls · "
+        f"{snap['accounts']} accounts{budget_txt}"
+    )
+    mdv2 = f"\U0001f6e0 *Ops* — {md(f'{now:%Y-%m-%d}')}\n{md(alarm)}{md(line)}"
+    plain = f"[OPS {now:%Y-%m-%d}] {alarm}{line}"
+    sent = await notifier.broadcast_text(
+        idempotency_key=f"OPS:{now:%Y-%m-%d}", mdv2=mdv2, plain=plain
+    )
+    return {"broadcast": sent, "alarm": bool(alarm), **snap}
+
+
 # Friday 21:00 UTC = Saturday 05:00 in Malaysia (no DST) = right after the
 # Friday US close — the user's "Friday after trading hours" anchor.
 WEEKLY_DUE_UTC_HOUR = 21

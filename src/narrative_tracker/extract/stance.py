@@ -166,12 +166,15 @@ class FallbackStanceClassifier:
             return await self._fallback.classify(text, symbol)
 
 
-def build_llm_infer(model: str) -> Callable[[str], Awaitable[StanceLabel]]:  # pragma: no cover
+def build_llm_infer(model: str, budget=None) -> Callable[[str], Awaitable[StanceLabel]]:  # pragma: no cover
     """Wire an async LLM inference callable via instructor (part of the ``prod`` extra)."""
 
     async def infer(text: str) -> StanceLabel:
         import instructor  # lazy
 
+        from ..ops.llm_budget import consume_or_raise
+
+        consume_or_raise(budget)  # over budget -> raise -> rule-based fallback
         client = instructor.from_provider(model, async_client=True)
         return await client.chat.completions.create(
             response_model=StanceLabel,
@@ -186,10 +189,10 @@ def build_llm_infer(model: str) -> Callable[[str], Awaitable[StanceLabel]]:  # p
     return infer
 
 
-def build_stance_classifier(*, model: str | None = None) -> StanceClassifier:
+def build_stance_classifier(*, model: str | None = None, budget=None) -> StanceClassifier:
     """Factory: LLM (+ rule-based fallback) when a model is configured, else
     the deterministic rule-based classifier."""
     rule = RuleBasedStanceClassifier()
     if not model:
         return rule
-    return FallbackStanceClassifier(LlmStanceClassifier(infer=build_llm_infer(model)), rule)
+    return FallbackStanceClassifier(LlmStanceClassifier(infer=build_llm_infer(model, budget)), rule)

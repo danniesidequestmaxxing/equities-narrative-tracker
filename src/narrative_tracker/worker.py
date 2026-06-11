@@ -291,6 +291,13 @@ async def main() -> None:  # pragma: no cover - prod entrypoint
         session_factory=session_factory,
         trading_chat_id=settings.telegram_trading_chat_id,  # type: ignore[arg-type]
     )
+    # M12: ops messages go to the ops chat when configured, else the channel.
+    ops_notifier = notifier
+    if settings.telegram_ops_chat_id:
+        ops_notifier = AlertNotifier(
+            bot=bot, session_factory=session_factory,
+            trading_chat_id=settings.telegram_ops_chat_id,
+        )
     # LLM stance when configured; deterministic rule-based otherwise (fail-safe).
     from . import jobs as cadence
     from .analyze.analyzer import Analyzer
@@ -300,17 +307,22 @@ async def main() -> None:  # pragma: no cover - prod entrypoint
 
     from .extract.relevance import build_relevance_gate
     from .extract.vision import CachingBudgetedVision, CountBudget, build_llm_vision
+    from .ops.llm_budget import DailyCallBudget
+
+    # M12: one shared daily call budget across every LLM surface — hitting it
+    # degrades to rule-based until UTC midnight instead of growing the bill.
+    llm_budget = DailyCallBudget(settings.llm_daily_call_cap)
 
     # M11: read chart/position screenshots on image-only posts. Cached per
     # media URL; budgeted per process lifetime so a retweet storm can't run
     # up the vision bill.
-    vision = build_llm_vision(settings.llm_model)
+    vision = build_llm_vision(settings.llm_model, llm_budget)
     if vision is not None:
         vision = CachingBudgetedVision(vision, budget=CountBudget(500))
 
     pipeline = ExtractionPipeline(
-        stance=build_stance_classifier(model=settings.llm_model),
-        relevance=build_relevance_gate(model=settings.llm_model),
+        stance=build_stance_classifier(model=settings.llm_model, budget=llm_budget),
+        relevance=build_relevance_gate(model=settings.llm_model, budget=llm_budget),
         vision=vision,
     )
     analyzer = Analyzer()
@@ -339,7 +351,22 @@ async def main() -> None:  # pragma: no cover - prod entrypoint
                 else _noop()
             ),
         ),
+        # M12: daily ops line — the zero-ingest alarm (idempotent per UTC date).
+        ScheduledJob(
+            "ops-report", 6 * 3600.0,
+            lambda now: cadence.run_ops_report(
+                session_factory, ops_notifier, now=now, llm_budget=llm_budget
+            ),
+        ),
     ]
+    # M12: liveness heartbeat — proves the scheduler loop itself is alive even
+    # on quiet days (row-written pings already cover ingestion).
+    if settings.healthchecks_url:  # pragma: no cover
+        from .ops.heartbeat import ping_heartbeat as _ping
+
+        scheduled.append(ScheduledJob(
+            "heartbeat", 120.0, lambda now: _ping(settings.healthchecks_url)
+        ))
     if settings.polygon_api_key:  # pragma: no cover
         from .db import recs
         from .db.bars import DbBarsProvider, DbLedgerProvider
@@ -386,7 +413,7 @@ async def main() -> None:  # pragma: no cover - prod entrypoint
     if settings.llm_model:  # pragma: no cover
         from .extract.calls_llm import build_call_extractor
 
-        call_extractor = build_call_extractor(settings.llm_model)
+        call_extractor = build_call_extractor(settings.llm_model, llm_budget)
         scheduled.append(ScheduledJob(
             "call-scan", 300.0,
             lambda now: cadence.run_call_scan(session_factory, call_extractor, notifier),
