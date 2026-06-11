@@ -8,6 +8,5 @@ COPY pyproject.toml README.md ./
 COPY src ./src
 RUN pip install ".[prod]"
 
-# Default process is the always-on worker; the API is a separate command
-# (see docker-compose.yml / Procfile).
-CMD ["python", "-m", "narrative_tracker.worker"]
+# One image, two roles (NT_PROCESS=web -> dashboard, else worker).
+CMD ["python", "-m", "narrative_tracker"]
