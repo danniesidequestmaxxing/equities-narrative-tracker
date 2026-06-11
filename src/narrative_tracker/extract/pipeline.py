@@ -1,22 +1,32 @@
 """Extraction pipeline (M1) — the cascade orchestrator.
 
-    options  →  cashtags (+ collision gate)  →  entity-link  →  vision  →  stance  →  dedupe
+    options  →  cashtags (+ collision gate)  →  entity-link  →  relevance gate
+    →  vision  →  stance  →  dedupe
 
-Returns ``list[Mention]`` with both confidences populated. The stance classifier
-and vision extractor are injected (rule-based / fake by default, LLM / multimodal
-in prod), so the whole pipeline is deterministic and testable without creds.
+Returns ``list[Mention]`` with both confidences populated. The stance classifier,
+relevance gate and vision extractor are injected (rule-based / none / fake by
+default, LLM / multimodal in prod), so the whole pipeline is deterministic and
+testable without creds.
 """
 
 from __future__ import annotations
+
+import logging
 
 from ..schemas.mention import AssetClass, Mention, ResolutionMethod
 from .cashtag import extract_cashtags
 from .collision import is_real_ticker
 from .entity import link_entities
 from .options import parse_options
+from .relevance import RelevanceGate
 from .stance import RuleBasedStanceClassifier, StanceClassifier
 from .symbology import classify_symbol
 from .vision import VisionExtractor
+
+log = logging.getLogger(__name__)
+
+# Drop a mention only when the LLM is confidently sure it's NOT about the asset.
+_RELEVANCE_DROP_CONFIDENCE = 0.6
 
 
 def _option_signature(m: Mention) -> tuple:
@@ -45,9 +55,11 @@ class ExtractionPipeline:
         *,
         stance: StanceClassifier | None = None,
         vision: VisionExtractor | None = None,
+        relevance: RelevanceGate | None = None,
     ) -> None:
         self._stance = stance or RuleBasedStanceClassifier()
         self._vision = vision
+        self._relevance = relevance
 
     async def extract(
         self,
@@ -108,6 +120,28 @@ class ExtractionPipeline:
             if m.symbol not in seen:
                 mentions.append(m)
                 seen.add(m.symbol)
+
+        # S2b — LLM relevance gate: drop symbols the post isn't actually
+        # discussing as assets ("$RDDT" = Reddit-the-site). Fail-open: any LLM
+        # failure keeps every mention.
+        if self._relevance is not None and mentions:
+            try:
+                verdicts = await self._relevance.check(text, [m.symbol for m in mentions])
+                kept = []
+                for m in mentions:
+                    v = verdicts.get(m.symbol)
+                    if (
+                        v is not None
+                        and not v.is_asset_reference
+                        and v.confidence >= _RELEVANCE_DROP_CONFIDENCE
+                    ):
+                        log.info("relevance gate dropped $%s: %s", m.symbol, v.reason or "not an asset reference")
+                        continue
+                    kept.append(m)
+                mentions = kept
+                seen = {m.symbol for m in mentions}
+            except Exception as exc:  # noqa: BLE001 - degrade, never break extraction
+                log.warning("relevance gate failed (%s); keeping all mentions", exc)
 
         # S4 — vision, only for image posts that text couldn't resolve.
         if self._vision and media_urls and not mentions:

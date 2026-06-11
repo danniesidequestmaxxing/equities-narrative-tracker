@@ -260,7 +260,12 @@ async def main() -> None:  # pragma: no cover - prod entrypoint
     from .recommend.types import RiskConfig
     from .scheduler import ScheduledJob, Scheduler
 
-    pipeline = ExtractionPipeline(stance=build_stance_classifier(model=settings.llm_model))
+    from .extract.relevance import build_relevance_gate
+
+    pipeline = ExtractionPipeline(
+        stance=build_stance_classifier(model=settings.llm_model),
+        relevance=build_relevance_gate(model=settings.llm_model),
+    )
     analyzer = Analyzer()
 
     # Digest needs no market data, so it always runs. Recommend + scoring require a
