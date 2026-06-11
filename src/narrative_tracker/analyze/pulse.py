@@ -204,6 +204,7 @@ def build_pulse_writer(model: str | None) -> PulseWriter | None:  # pragma: no c
         return await client.chat.completions.create(
             response_model=PulseBrief,
             max_retries=2,
+            max_tokens=2048,  # headline + 2-4 narratives; Anthropic requires max_tokens
             messages=[
                 {"role": "system", "content": PULSE_SYSTEM_PROMPT},
                 {"role": "user", "content": context},

@@ -176,6 +176,7 @@ def build_llm_infer(model: str) -> Callable[[str], Awaitable[StanceLabel]]:  # p
         return await client.chat.completions.create(
             response_model=StanceLabel,
             max_retries=2,
+            max_tokens=1024,  # tiny label task; Anthropic requires max_tokens
             messages=[
                 {"role": "system", "content": STANCE_SYSTEM_PROMPT},
                 {"role": "user", "content": text},

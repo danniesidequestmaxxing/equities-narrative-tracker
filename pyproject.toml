@@ -25,6 +25,8 @@ prod = [
     "redis>=5.2.0",
     "httpx>=0.27.0",
     "websockets>=13.0",
+    # LLM path (stance / relevance gate / pulse brief) via instructor.from_provider
+    "instructor[anthropic]>=1.8.0",
 ]
 dev = [
     "pytest>=8.3.0",

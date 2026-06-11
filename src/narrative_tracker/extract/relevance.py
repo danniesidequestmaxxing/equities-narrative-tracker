@@ -78,6 +78,7 @@ def build_llm_relevance_infer(
         return await client.chat.completions.create(
             response_model=RelevanceVerdict,
             max_retries=2,
+            max_tokens=1024,  # per-symbol verdicts; Anthropic requires max_tokens
             messages=[
                 {"role": "system", "content": RELEVANCE_SYSTEM_PROMPT},
                 {
