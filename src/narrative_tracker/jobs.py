@@ -118,6 +118,8 @@ async def run_pulse(
     posted_handles = {r["handle"] for r in window}
     quiet = sorted(h for h in active if h not in posted_handles)
 
+    div = await analytics.divergence(sf, since=since, limit=3)
+
     bucket = f"{now:%Y-%m-%d}:{int(now.hour // max(1, int(hours)))}"
     mdv2, plain = pulse_mod.build_pulse(
         window_label=f"{hours:g}h",
@@ -127,7 +129,7 @@ async def run_pulse(
         tickers_count=len({r["symbol"] for r in window}),
         hot=hot, brief=brief, narratives=pulse_mod.fallback_narratives(window),
         early=early, deep_dives=deep_dives, recap=recap, quiet=quiet,
-        market_hint=market is None, llm_hint=writer is None,
+        market_hint=market is None, llm_hint=writer is None, divergence=div,
     )
     sent = False
     if broadcast:
@@ -332,6 +334,66 @@ def _horizon_days(raw: str | None) -> int:
     from .extract.calls_llm import horizon_days
 
     return horizon_days(raw)
+
+
+async def run_weekly_report(sf, notifier: AlertNotifier, *, now: datetime) -> dict:
+    """M11: the Sunday ritual — who was right this week, which stated calls
+    graded, what ran hottest. One idempotent broadcast per ISO week; silent
+    when there is nothing to report yet."""
+    from .db import scoreboard as db_scoreboard
+
+    if await killswitch.is_killed(sf) or await killswitch.get_pause(sf) != killswitch.PAUSE_NONE:
+        return {"skipped": "killed_or_paused"}
+
+    since = now - timedelta(days=7)
+    board = await db_scoreboard.account_scoreboard(sf, since=since)
+    graded = await db_calls.closed_calls(sf, since=since)
+    hot = await analytics.hot_tickers(sf, since=since, limit=5)
+    if not board["ranked"] and not graded and not hot:
+        return {"skipped": "no_data"}
+
+    iso = now.isocalendar()
+    L = [f"\U0001f4c5 *Weekly alpha report* — week {iso.week}, {md(f'{now:%Y-%m-%d}')}"]
+
+    L += ["", "*\U0001f3c6 Who was right \\(7d edge vs SPY, 3\\-day\\)*"]
+    if board["ranked"]:
+        for i, a in enumerate(board["ranked"][:5], 1):
+            hit = f"{a['hit_3d'] * 100:.0f}%" if a["hit_3d"] is not None else "—"
+            avg = md(f"{(a['avg_3d'] or 0) * 100:+.1f}%")
+            L.append(f"{i}\\. @{md(a['handle'])} · n={a['n']} · hit {md(hit)} · avg {avg}")
+    else:
+        L.append("_not enough graded mentions this week_")
+
+    L += ["", "*\U0001f3af Stated calls graded this week*"]
+    if graded:
+        for c in graded[:6]:
+            res = f"{c['realized_r']:+.1f}R" if c["realized_r"] is not None else (
+                f"{(c['realized_pct'] or 0) * 100:+.1f}%")
+            emoji = "✅" if (c["realized_pct"] or 0) > 0 else "❌"
+            L.append(f"{emoji} `{md_code('$' + c['symbol'])}` {md(c['direction'])} by @{md(c['handle'])} "
+                     f"→ {md(res)} \\({md(c['reason'] or '')}\\)")
+    else:
+        L.append("_none closed this week_")
+
+    L += ["", "*\U0001f525 Hottest names*"]
+    if hot:
+        L.append(md(" · ".join(f"${t['symbol']} ({t['mentions']}m)" for t in hot)))
+    else:
+        L.append("_quiet week_")
+
+    L += ["", "_Analysis only · derived metrics · not financial advice_"]
+    mdv2 = "\n".join(L)
+    plain = (
+        f"[WEEKLY] week {iso.week} {now:%Y-%m-%d}\n"
+        + "Top: " + ", ".join(f"@{a['handle']} {(a['avg_3d'] or 0) * 100:+.1f}%" for a in board["ranked"][:5])
+        + "\nGraded: " + (", ".join(
+            f"${c['symbol']} {(c['realized_pct'] or 0) * 100:+.1f}%" for c in graded[:6]) or "none")
+        + "\nHot: " + ", ".join(f"${t['symbol']}" for t in hot)
+    )
+    sent = await notifier.broadcast_text(
+        idempotency_key=f"WEEKLY:{iso.year}-W{iso.week}", mdv2=mdv2, plain=plain
+    )
+    return {"broadcast": sent, "ranked": len(board["ranked"]), "graded": len(graded)}
 
 
 def _recommend_inputs(analyzer: Analyzer, now_ts: float, config: RiskConfig) -> list[dict]:

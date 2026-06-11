@@ -212,6 +212,24 @@ async def latest_account_scores(
         return out
 
 
+async def latest_account_stat(
+    session_factory: async_sessionmaker[AsyncSession], *, account_id: int
+) -> dict | None:
+    """Latest evidence-weighted credibility + sample size (alert stamping)."""
+    from .models import AccountScore
+
+    async with session_factory() as session:
+        row = await session.scalar(
+            select(AccountScore)
+            .where(AccountScore.account_id == account_id)
+            .order_by(AccountScore.as_of.desc())
+            .limit(1)
+        )
+    if row is None:
+        return None
+    return {"score": float(row.decayed_score), "n": int(row.sample_size or 0)}
+
+
 async def all_accounts(session_factory: async_sessionmaker[AsyncSession]) -> list[dict]:
     async with session_factory() as session:
         rows = await session.scalars(select(Account))

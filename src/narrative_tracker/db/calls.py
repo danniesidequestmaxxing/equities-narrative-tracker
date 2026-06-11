@@ -121,6 +121,23 @@ async def close_call(
         await session.commit()
 
 
+async def closed_calls(sf: async_sessionmaker[AsyncSession], *, since: datetime) -> list[dict]:
+    """Stated calls graded within the window (weekly report input)."""
+    stmt = (
+        select(ExplicitCall, Account.handle)
+        .join(Account, ExplicitCall.account_id == Account.id)
+        .where(ExplicitCall.status == "closed", ExplicitCall.closed_at >= since)
+        .order_by(ExplicitCall.closed_at.desc())
+    )
+    async with sf() as session:
+        rows = (await session.execute(stmt)).all()
+    return [
+        {"symbol": c.symbol, "direction": c.direction, "reason": c.close_reason,
+         "realized_r": c.realized_r, "realized_pct": c.realized_pct, "handle": handle}
+        for c, handle in rows
+    ]
+
+
 async def stated_stats(sf: async_sessionmaker[AsyncSession], *, since: datetime) -> dict[str, dict]:
     """Per-handle stated-call record: closed/open counts, hit rate, averages."""
     stmt = (

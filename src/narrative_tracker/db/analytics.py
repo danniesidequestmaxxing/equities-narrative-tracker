@@ -102,6 +102,58 @@ async def ticker_detail(
     return {"symbol": symbol, "sentiment": s, "n_eff": n_eff, "mentions": len(rows), "takes": takes}
 
 
+_SMART_CRED = 0.45  # above every prior except HOT -> "proven or pre-trusted"
+
+
+def _raw_lean(rows: list[dict], scores: dict[int, float] | None) -> float | None:
+    """Credibility-weighted mean stance WITHOUT the +K shrinkage — for comparing
+    two sides against each other (shrinking both toward 0 would crush the gap)."""
+    num = den = 0.0
+    for r in rows:
+        sign = _STANCE_SIGN.get(r["stance"], 0)
+        w = (_cred_for(r, scores) ** _GAMMA) * (r["stance_confidence"] or 0.5)
+        num += w * sign
+        den += w
+    return round(num / den, 3) if den > 0 else None
+
+
+async def divergence(
+    sf: async_sessionmaker[AsyncSession], *, since: datetime, limit: int = 6, min_gap: float = 0.5
+) -> list[dict]:
+    """M11 smart-vs-crowd: tickers where high-credibility accounts lean against
+    the rest. Disagreement between proven accounts and the chorus is signal."""
+    from . import repo
+
+    rows = await _mention_rows(sf, since=since)
+    scores = await repo.latest_account_scores(sf)
+    by_symbol: dict[str, list[dict]] = defaultdict(list)
+    for r in rows:
+        by_symbol[r["symbol"]].append(r)
+
+    out = []
+    for symbol, group in by_symbol.items():
+        smart = [r for r in group if _cred_for(r, scores) >= _SMART_CRED]
+        crowd = [r for r in group if _cred_for(r, scores) < _SMART_CRED]
+        if not smart or not crowd:
+            continue
+        s_smart = _raw_lean(smart, scores)
+        s_crowd = _raw_lean(crowd, scores)
+        if s_smart is None or s_crowd is None:
+            continue
+        gap = round(s_smart - s_crowd, 3)
+        if abs(gap) < min_gap:
+            continue
+        out.append({
+            "symbol": symbol,
+            "smart": s_smart,
+            "crowd": s_crowd,
+            "gap": gap,
+            "smart_accounts": sorted({r["handle"] for r in smart}),
+        })
+    out.sort(key=lambda d: -abs(d["gap"]))
+    return out[:limit]
+
+
 async def hot_tickers(
     sf: async_sessionmaker[AsyncSession], *, since: datetime, limit: int = 20
 ) -> list[dict]:

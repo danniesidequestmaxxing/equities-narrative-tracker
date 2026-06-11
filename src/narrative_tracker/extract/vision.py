@@ -18,6 +18,8 @@ from __future__ import annotations
 import hashlib
 from typing import Protocol
 
+from pydantic import BaseModel as _BaseModel
+
 from ..schemas.mention import Mention
 
 
@@ -82,3 +84,84 @@ class FakeVisionExtractor:
     async def extract(self, image_url: str, *, source_post_id: str = "") -> list[Mention]:
         self.calls += 1
         return [m.model_copy(update={"source_post_id": source_post_id}) for m in self._mapping.get(image_url, [])]
+
+
+# --- M11: the real multimodal extractor --------------------------------------
+
+VISION_SYSTEM_PROMPT = """\
+You read finance images from X/Twitter posts: chart screenshots, position/P&L
+screenshots, watchlist screenshots. Extract the tickers the image is actually
+about.
+
+For each ticker: the symbol shown; the direction the image implies (a chart
+with long levels drawn / a long position => long; short setup / put position
+=> short; a plain chart or unclear => unclear); any explicit price levels drawn
+or listed; and what kind of image it is (chart | position | watchlist | other).
+Calibrated confidence in [0,1] — screenshots are noisy, do not guess symbols
+you cannot clearly read. No tickers visible => has_tickers=false."""
+
+
+class VisionItem(_BaseModel):
+    symbol: str
+    direction: str = "unclear"  # long|short|unclear
+    levels: list[float] = []
+    kind: str = "chart"  # chart|position|watchlist|other
+    confidence: float = 0.5
+
+
+class VisionRead(_BaseModel):
+    has_tickers: bool = False
+    items: list[VisionItem] = []
+
+
+def _to_mentions(read: "VisionRead", *, source_post_id: str, min_confidence: float = 0.6) -> list[Mention]:
+    from ..schemas.mention import AssetClass, ResolutionMethod, Stance
+    from .symbology import classify_symbol
+
+    stance_map = {"long": Stance.BULLISH, "short": Stance.BEARISH}
+    out: list[Mention] = []
+    if not read.has_tickers:
+        return out
+    for item in read.items:
+        sym = item.symbol.strip().lstrip("$").upper()
+        if not sym or len(sym) > 6 or item.confidence < min_confidence:
+            continue
+        stance = stance_map.get(item.direction, Stance.NEUTRAL)
+        out.append(Mention(
+            symbol=sym,
+            asset_class=AssetClass(classify_symbol(sym, "")),
+            resolution_method=ResolutionMethod.VISION_OCR,
+            mention_confidence=round(min(0.9, item.confidence), 2),  # image reads cap below text
+            stance=stance,
+            stance_confidence=round(item.confidence * 0.85, 2) if stance is not Stance.NEUTRAL else 0.5,
+            surface_text=f"image:{item.kind}",
+            source_post_id=source_post_id,
+        ))
+    return out
+
+
+def build_llm_vision(model: str | None):  # pragma: no cover - prod wiring
+    """Multimodal LLM vision extractor via instructor; None when no model."""
+    if not model:
+        return None
+
+    class _LlmVision:
+        async def extract(self, image_url: str, *, source_post_id: str = "") -> list[Mention]:
+            import instructor  # lazy: part of the `prod` extra
+
+            client = instructor.from_provider(model, async_client=True)
+            read = await client.chat.completions.create(
+                response_model=VisionRead,
+                max_retries=1,
+                max_tokens=1024,
+                messages=[
+                    {"role": "system", "content": VISION_SYSTEM_PROMPT},
+                    {"role": "user", "content": [
+                        instructor.Image.from_url(image_url),
+                        "Extract the tickers from this image.",
+                    ]},
+                ],
+            )
+            return _to_mentions(read, source_post_id=source_post_id)
+
+    return _LlmVision()

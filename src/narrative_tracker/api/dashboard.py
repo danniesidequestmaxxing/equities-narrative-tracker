@@ -60,6 +60,12 @@ async def api_scoreboard(days: float = 30) -> dict:
     return await scoreboard.account_scoreboard(_sf, since=_since(days * 24))
 
 
+@app.get("/api/divergence")
+async def api_divergence(hours: float = 72) -> list[dict]:
+    """M11 smart-vs-crowd: where proven accounts lean against the chorus."""
+    return await analytics.divergence(_sf, since=_since(hours))
+
+
 @app.get("/api/sources")
 async def api_sources() -> dict:
     """The current watchlist. Public — anyone can read or change it."""
@@ -150,6 +156,9 @@ tbody tr{cursor:pointer}tbody tr:hover{background:var(--panel2)}
   <div class="card" style="grid-column:1/-1"><h2>🏆 Account scoreboard — edge vs SPY, last 30d</h2>
     <div id="board"><div class="empty">loading…</div></div>
   </div>
+  <div class="card" style="grid-column:1/-1"><h2>🧠 Smart vs crowd — proven accounts leaning against the chorus, 72h</h2>
+    <div id="diverge"><div class="empty">loading…</div></div>
+  </div>
   <div class="card" style="grid-column:1/-1"><h2>📋 Watchlist — anyone can add or remove</h2>
     <div class="srcadd">
       <input id="newh" placeholder="add an X handle e.g. elonmusk" />
@@ -235,5 +244,17 @@ async function rmSrc(h){
   else{const e=await r.json().catch(()=>({}));note('⚠️ '+(e.detail||('HTTP '+r.status)));}
 }
 document.getElementById('newh').addEventListener('keydown',e=>{if(e.key==='Enter')addSrc();});
-setTf(); refresh(); loadSources(); loadBoard(); setInterval(()=>{refresh(); loadSources(); loadBoard(); if(CUR)loadTicker(CUR);}, 60000);
+async function loadDiverge(){
+  const x=await (await fetch('/api/divergence?hours=72')).json();
+  const d=document.getElementById('diverge');
+  const pc=v=>((v>0?'+':'')+v.toFixed(2));
+  if(!x.length){d.innerHTML='<div class="empty">No significant smart-vs-crowd disagreement right now — that itself is information.</div>';return;}
+  d.innerHTML=`<table><thead><tr><th>Ticker</th><th>Smart money</th><th>Crowd</th><th>Gap</th><th>Smart accounts</th></tr></thead><tbody>`+
+   x.map(r=>`<tr onclick="loadTicker('${esc(r.symbol)}')"><td class="sym">$${esc(r.symbol)}</td>
+    <td class="${r.smart>0?'pos':r.smart<0?'neg':'neu'}">${pc(r.smart)}</td>
+    <td class="${r.crowd>0?'pos':r.crowd<0?'neg':'neu'}">${pc(r.crowd)}</td>
+    <td class="${r.gap>0?'pos':'neg'}">${pc(r.gap)}</td>
+    <td class="mut">${r.smart_accounts.map(a=>'@'+esc(a)).join(', ')}</td></tr>`).join('')+`</tbody></table>`;
+}
+setTf(); refresh(); loadSources(); loadBoard(); loadDiverge(); setInterval(()=>{refresh(); loadSources(); loadBoard(); loadDiverge(); if(CUR)loadTicker(CUR);}, 60000);
 </script></body></html>"""

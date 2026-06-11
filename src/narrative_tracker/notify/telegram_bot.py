@@ -94,12 +94,16 @@ def _option_str(od: OptionDetail) -> str:
     return f"{core} {od.expiry_raw}" if od.expiry_raw else core
 
 
-def build_alert(post: RawPost, mention: Mention, *, watched: bool = False) -> tuple[str, str]:
+def build_alert(
+    post: RawPost, mention: Mention, *, watched: bool = False, author_stat: dict | None = None
+) -> tuple[str, str]:
     """Return ``(markdown_v2, plain)`` for a single ticker alert.
 
     Always quotes the post text and deep-links the exact post — every alert
     carries its receipt, so a surprising ticker can be verified at a glance.
-    ``watched`` pins a 🔔 on tickers from the user's /watch list.
+    ``watched`` pins a 🔔 on tickers from the user's /watch list; ``author_stat``
+    stamps the author's evidence-weighted credibility so each alert arrives
+    pre-weighted (M11).
     """
     symbol = mention.symbol
     tv = tradingview_url(symbol)
@@ -111,10 +115,16 @@ def build_alert(post: RawPost, mention: Mention, *, watched: bool = False) -> tu
     type_tag = _POST_TYPE_TAG.get(post.post_type, "")
     snippet = _snippet(post.text)
     bell = "\U0001f514 " if watched else ""  # 🔔
+    stat_md = stat_plain = ""
+    if author_stat:
+        stat_txt = f"cred {author_stat['score']:.2f} · evidence n={author_stat['n']}"
+        stat_md = f"\U0001f4ca {md(stat_txt)}\n"
+        stat_plain = f"[{stat_txt}]\n"
     mdv2 = (
         f"{bell}⚡ *{md(header)}* · {emoji} {md(mention.stance.value)} · {md(asset)}\n"
         f"[{md('@' + (post.handle or 'source'))}]({md_url(link)}) · "
         f"{md(type_tag)}{md(post.posted_at.strftime('%H:%M ET'))}\n"
+        f"{stat_md}"
         f"“_{md(snippet)}_”\n"
         f"[\U0001f517 Post]({md_url(link)}) · [\U0001f4c8 Chart]({md_url(tv)}) · {md('#' + symbol)}\n"
         f"\n"
@@ -123,6 +133,7 @@ def build_alert(post: RawPost, mention: Mention, *, watched: bool = False) -> tu
     plain = (
         f"{'[WATCHED] ' if watched else ''}[ALERT] ${symbol}{opt} {mention.stance.value} ({asset})\n"
         f"@{post.handle or 'source'} {type_tag}at {post.posted_at.strftime('%H:%M ET')}\n"
+        f"{stat_plain}"
         f'"{snippet}"\n'
         f"{link}\n{tv}\n"
         f"Derived signal - not financial advice"
@@ -204,7 +215,11 @@ class AlertNotifier:
             return False
 
         watched = await repo.is_watched(self._sf, mention.symbol)
-        mdv2, plain = build_alert(post, mention, watched=watched)
+        author_stat = None
+        account_id = await repo.get_account_id(self._sf, platform_user_id=post.platform_user_id)
+        if account_id is not None:
+            author_stat = await repo.latest_account_stat(self._sf, account_id=account_id)
+        mdv2, plain = build_alert(post, mention, watched=watched, author_stat=author_stat)
         message_id = await self._safe_send(mdv2, plain)
         await idempotency.mark_sent(
             self._sf, idempotency_key=key, telegram_message_id=message_id

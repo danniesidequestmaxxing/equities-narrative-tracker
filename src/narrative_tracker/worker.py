@@ -295,10 +295,19 @@ async def main() -> None:  # pragma: no cover - prod entrypoint
     from .scheduler import ScheduledJob, Scheduler
 
     from .extract.relevance import build_relevance_gate
+    from .extract.vision import CachingBudgetedVision, CountBudget, build_llm_vision
+
+    # M11: read chart/position screenshots on image-only posts. Cached per
+    # media URL; budgeted per process lifetime so a retweet storm can't run
+    # up the vision bill.
+    vision = build_llm_vision(settings.llm_model)
+    if vision is not None:
+        vision = CachingBudgetedVision(vision, budget=CountBudget(500))
 
     pipeline = ExtractionPipeline(
         stance=build_stance_classifier(model=settings.llm_model),
         relevance=build_relevance_gate(model=settings.llm_model),
+        vision=vision,
     )
     analyzer = Analyzer()
 
@@ -314,7 +323,12 @@ async def main() -> None:  # pragma: no cover - prod entrypoint
                 cadence_label="Daily", date_label=now.strftime("%Y-%m-%d"),
                 now_ts=now.timestamp(),
             ),
-        )
+        ),
+        # M11: the Sunday ritual (idempotent per ISO week; silent when empty).
+        ScheduledJob(
+            "weekly-report", 7 * 86400.0,
+            lambda now: cadence.run_weekly_report(session_factory, notifier, now=now),
+        ),
     ]
     if settings.polygon_api_key:  # pragma: no cover
         from .db import recs

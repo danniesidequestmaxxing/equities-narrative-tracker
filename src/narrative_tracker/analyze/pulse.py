@@ -248,6 +248,7 @@ def build_pulse(
     quiet: list[str],
     market_hint: bool = False,  # True -> tell the user how to enable TA section
     llm_hint: bool = False,
+    divergence: list[dict] = (),  # M11 smart-vs-crowd rows (optional)
 ) -> tuple[str, str]:
     """Render the pulse as ``(markdown_v2, plain)``. Sections are capped so the
     message stays under Telegram's 4096-char limit."""
@@ -299,6 +300,15 @@ def build_pulse(
             L.append(f"\U0001f195 `{md_code('$' + e['symbol'])}` — {md(why)} · {e['accounts']}acct \\({md(who)}\\)")
     else:
         L.append("_nothing newly emerging_")
+
+    # -- smart vs crowd (only when there's real disagreement)
+    if divergence:
+        L += ["", "*\U0001f9e0 Smart vs crowd*"]
+        for d in divergence[:3]:
+            who = ", ".join("@" + h for h in d["smart_accounts"][:2])
+            s_txt = md(f"{d['smart']:+.2f}")
+            c_txt = md(f"{d['crowd']:+.2f}")
+            L.append(f"`{md_code('$' + d['symbol'])}` smart {s_txt} vs crowd {c_txt} \\({md(who)}\\)")
 
     # -- deep dive
     L += ["", "*\U0001f52c Chart \\& fundamentals check*"]
