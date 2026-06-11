@@ -12,6 +12,7 @@ Seamless input — no command syntax needed:
 
 from __future__ import annotations
 
+import re
 from datetime import datetime, timedelta, timezone
 
 from ..db import analytics, repo, scoreboard
@@ -21,11 +22,13 @@ from . import service
 HELP = (
     "Seamless input:\n"
     "@handle [hot|warm|cold] — track an X account\n"
+    "t.me/channel — track a public Telegram channel\n"
     "$NVDA — instant ticker brief\n"
     "$NVDA watch · $NVDA unwatch — 🔔 watchlist\n"
     "\n"
     "Commands:\n"
     "/addsource <handle> [tier=HOT|WARM|COLD]\n"
+    "/addchannel <name> [tier] — Telegram channel\n"
     "/rmsource <handle> · /tier <handle> <TIER>\n"
     "/sources · /watch <sym> · /unwatch <sym> · /watching\n"
     "/scoreboard [days] — who's actually right\n"
@@ -155,6 +158,23 @@ async def _add_account(sf, handle: str, tier_word: str | None) -> str:
     return f"✅ Watching @{handle} ({tier}). Polling picks it up within ~2 min."
 
 
+_TG_LINK_RE = re.compile(r"(?:https?://)?t\.me/(?:s/)?(?P<name>[A-Za-z0-9_]{4,32})/?$")
+
+
+async def _add_channel(sf, name: str, tier_word: str | None) -> str:
+    name = name.strip().lstrip("@").lower()
+    m = _TG_LINK_RE.match(name)
+    if m:
+        name = m.group("name").lower()
+    if not re.fullmatch(r"[a-z0-9_]{4,32}", name):
+        return "Usage: /addchannel <public channel name>  (or paste its t.me link)"
+    source = f"tg:{name}"
+    tier = tier_word.upper() if tier_word and tier_word.upper() in _TIERS else "COLD"
+    await service.add_source(sf, platform_user_id=source, handle=source, tier=tier)
+    return (f"✅ Watching t.me/{name} ({tier}). Polling starts within ~2 min — "
+            f"the channel must be public (its t.me/s/{name} preview must show messages).")
+
+
 def _fmt_ta(ta: dict) -> str:
     bits = [f"trend {ta['trend']}"]
     if ta.get("rsi") is not None:
@@ -237,6 +257,9 @@ async def handle_command(text: str, from_id: int, sf, admin_ids: list[int], *, m
         if parts[0].startswith("@") and len(parts[0]) > 1:
             return await _add_account(sf, parts[0], parts[1] if len(parts) > 1 else None)
 
+        if _TG_LINK_RE.match(parts[0]):  # pasted t.me/channel link
+            return await _add_channel(sf, parts[0], parts[1] if len(parts) > 1 else None)
+
         if parts[0].startswith("$") and len(parts[0]) > 1:
             action = parts[1].lower() if len(parts) > 1 else ""
             sym = parts[0]
@@ -259,6 +282,11 @@ async def handle_command(text: str, from_id: int, sf, admin_ids: list[int], *, m
                 if a.lower().startswith("tier="):
                     tier = a.split("=", 1)[1].upper()
             return await _add_account(sf, args[0], tier)
+
+        if cmd == "addchannel":
+            if not args:
+                return "Usage: /addchannel <public channel name> [tier]"
+            return await _add_channel(sf, args[0], args[1] if len(args) > 1 else None)
 
         if cmd == "rmsource":
             if not args:

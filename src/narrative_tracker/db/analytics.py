@@ -74,6 +74,8 @@ def _sentiment(rows: list[dict], scores: dict[int, float] | None = None) -> tupl
 
 
 def _tweet_url(handle: str, post_id: str) -> str:
+    if handle.startswith("tg:"):
+        return f"https://t.me/{handle[3:]}/{post_id}" if post_id else f"https://t.me/{handle[3:]}"
     return f"https://x.com/{handle}/status/{post_id}" if handle and post_id else ""
 
 

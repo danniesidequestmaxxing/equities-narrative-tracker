@@ -71,7 +71,13 @@ def tradingview_url(symbol: str) -> str:
 
 
 def post_url(post: RawPost) -> str:
-    """Deep link to the exact post (falls back to the profile)."""
+    """Deep link to the exact post (falls back to the profile). ``tg:`` sources
+    (M13 Telegram channels) get t.me links instead of x.com."""
+    if post.handle.startswith("tg:"):
+        name = post.handle[3:]
+        if post.platform_post_id.isdigit():
+            return f"https://t.me/{name}/{post.platform_post_id}"
+        return f"https://t.me/{name}"
     if post.handle and post.platform_post_id:
         return f"https://x.com/{post.handle}/status/{post.platform_post_id}"
     return f"https://x.com/{post.handle}" if post.handle else ""
@@ -82,7 +88,7 @@ def _snippet(text: str, limit: int = 220) -> str:
     return flat if len(flat) <= limit else flat[: limit - 1] + "…"
 
 
-_POST_TYPE_TAG = {"reply": "↩️ reply · ", "retweet": "🔁 retweet · "}
+_POST_TYPE_TAG = {"reply": "↩️ reply · ", "retweet": "🔁 retweet · ", "forward": "🔁 forward · "}
 
 
 def _option_str(od: OptionDetail) -> str:

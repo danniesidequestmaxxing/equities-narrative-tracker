@@ -7,7 +7,9 @@ import logging
 log = logging.getLogger(__name__)
 
 
-async def run_admin_bot(bot, sf, admin_ids: list[int], *, market=None) -> None:  # pragma: no cover
+async def run_admin_bot(
+    bot, sf, admin_ids: list[int], *, market=None, on_channel_post=None
+) -> None:  # pragma: no cover
     from aiogram import Dispatcher
     from aiogram.types import Message
 
@@ -15,10 +17,37 @@ async def run_admin_bot(bot, sf, admin_ids: list[int], *, market=None) -> None: 
 
     dp = Dispatcher()
 
+    if on_channel_post is not None:
+        from datetime import timezone as _tz
+
+        from ..ingest.provider import RawPost
+
+        @dp.channel_post()
+        async def _on_channel_post(message: Message) -> None:
+            # M13 path 1: channels where this bot is an admin feed straight
+            # into the pipeline (text + captions; media needs path 2's public
+            # CDN urls, bot file links would embed the token).
+            text = message.text or message.caption or ""
+            if not text:
+                return
+            name = (message.chat.username or str(message.chat.id)).lower()
+            posted = message.date.astimezone(_tz.utc) if message.date else None
+            if posted is None:
+                return
+            await on_channel_post(RawPost(
+                platform_user_id=f"tg:{name}",
+                handle=f"tg:{name}",
+                platform_post_id=str(message.message_id),
+                text=text,
+                posted_at=posted,
+            ))
+
     @dp.message()
     async def _on_message(message: Message) -> None:
-        # Seamless input: /commands, @handle (track account), $TICKER (brief/watch).
-        if not message.text or message.text[0] not in "/@$":
+        # Seamless input: /commands, @handle (track account), $TICKER
+        # (brief/watch), t.me/... (track a Telegram channel).
+        text = (message.text or "").strip()
+        if not text or (text[0] not in "/@$" and not text.lower().startswith(("t.me/", "https://t.me/", "http://t.me/"))):
             return
         from_id = message.from_user.id if message.from_user else 0
 

@@ -278,13 +278,31 @@ async def main() -> None:  # pragma: no cover - prod entrypoint
             session_factory, platform_user_id=handle.lower(), handle=handle, tier="COLD"
         )
 
-    provider = TwitterApiIoPollingProvider(
-        api_key=settings.twitterapi_io_key,
-        handles_provider=lambda: repo.active_handles(session_factory),
-        base_url=settings.twitterapi_io_base_url,
-        poll_interval_s=settings.poll_interval_s,
-        initial_lookback_s=settings.initial_lookback_s,
-    )
+    # One watchlist, two pollers: plain handles go to the X poller, tg:-prefixed
+    # sources to the public Telegram-channel poller (M13). Merged downstream.
+    async def _x_handles() -> list[str]:
+        return [h for h in await repo.active_handles(session_factory) if not h.startswith("tg:")]
+
+    async def _tg_channels() -> list[str]:
+        return [h for h in await repo.active_handles(session_factory) if h.startswith("tg:")]
+
+    from .ingest.composite import CompositeProvider
+    from .ingest.telegram_channels import TgPublicChannelProvider
+
+    provider = CompositeProvider([
+        TwitterApiIoPollingProvider(
+            api_key=settings.twitterapi_io_key,
+            handles_provider=_x_handles,
+            base_url=settings.twitterapi_io_base_url,
+            poll_interval_s=settings.poll_interval_s,
+            initial_lookback_s=settings.initial_lookback_s,
+        ),
+        TgPublicChannelProvider(
+            channels_provider=_tg_channels,
+            poll_interval_s=settings.poll_interval_s,
+            initial_lookback_s=settings.initial_lookback_s,
+        ),
+    ])
     bot = build_aiogram_bot(settings.telegram_bot_token)  # type: ignore[arg-type]
     notifier = AlertNotifier(
         bot=bot,
@@ -450,8 +468,22 @@ async def main() -> None:  # pragma: no cover - prod entrypoint
     # Live admin-command listener (/addsource etc.) alongside the worker.
     from .admin.bot import run_admin_bot
 
+    # M13 path 1: channels where the bot is an admin feed the same pipeline.
+    async def _ingest_channel_post(post: RawPost) -> None:
+        try:
+            await process_post(
+                post, session_factory=session_factory, notifier=notifier,
+                pipeline=pipeline, analyzer=analyzer,
+                heartbeat_url=settings.healthchecks_url,
+            )
+        except Exception:  # noqa: BLE001 - one bad channel post must not kill the bot
+            log.exception("failed to process channel post %s", post.platform_post_id)
+
     admin_task = asyncio.create_task(
-        run_admin_bot(bot, session_factory, settings.admin_id_list, market=market)
+        run_admin_bot(
+            bot, session_factory, settings.admin_id_list,
+            market=market, on_channel_post=_ingest_channel_post,
+        )
     )
     try:
         await worker.run()
