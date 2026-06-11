@@ -106,12 +106,16 @@ class PolygonMarketData:
         return out
 
 
-def build_polygon_fetch(api_key: str, *, base_url: str = "https://api.polygon.io") -> Fetch:  # pragma: no cover
+def build_polygon_fetch(api_key: str, *, base_url: str = "https://api.massive.com") -> Fetch:  # pragma: no cover
     async def fetch(path: str, params: dict) -> dict:
         import httpx  # lazy: part of the `prod` extra
 
-        async with httpx.AsyncClient(timeout=20.0) as client:
-            resp = await client.get(base_url + path, params={**params, "apiKey": api_key})
+        # Key goes in the Authorization header, NOT a query param — httpx logs
+        # full request URLs at INFO, so a query-string key leaks into the logs.
+        async with httpx.AsyncClient(
+            timeout=20.0, headers={"Authorization": f"Bearer {api_key}"}
+        ) as client:
+            resp = await client.get(base_url + path, params=params)
             resp.raise_for_status()
             return resp.json()
 
