@@ -323,6 +323,18 @@ async def main() -> None:  # pragma: no cover - prod entrypoint
     else:
         log.warning("market data provider not configured; recommend + scoring disabled")
 
+    # M9-C: rolling explicit-call scan — backfills history, then keeps up with
+    # new posts. Needs the LLM; 🎯 notifications go through the notifier.
+    if settings.llm_model:  # pragma: no cover
+        from .extract.calls_llm import build_call_extractor
+
+        call_extractor = build_call_extractor(settings.llm_model)
+        scheduled.append(ScheduledJob(
+            "call-scan", 300.0,
+            lambda now: cadence.run_call_scan(session_factory, call_extractor, notifier),
+        ))
+        log.info("explicit-call scan enabled (every 5 min)")
+
     # The recurring investor briefing (every NT_PULSE_INTERVAL_HOURS; 0 disables).
     # Degrades gracefully: no Polygon -> no TA section; no LLM -> seed-theme narratives.
     if settings.pulse_interval_hours > 0:  # pragma: no cover

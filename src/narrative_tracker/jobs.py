@@ -19,7 +19,9 @@ from .analyze.analyzer import Analyzer
 from .analyze.narratives import assign_narratives
 from .analyze.technicals import snapshot_from_bars
 from .db import analytics, recs, repo
+from .db import calls as db_calls
 from .db import outcomes as db_outcomes
+from .notify.escaping import md, md_code
 from .enrich.market_data import MarketDataProvider
 from .extract.symbology import classify_symbol
 from .notify.telegram_bot import AlertNotifier
@@ -183,7 +185,109 @@ async def run_outcomes(
             fwd=out["fwd"], bench=(bench or {}).get("fwd"),
         )
         computed += 1
-    return {"computed": computed, "pending": len(pend) - computed, "symbols": len(symbols)}
+
+    # M9-C: grade open stated calls against the same bars — which came first,
+    # their stop, their target, or the timeout?
+    stated_closed = 0
+    for c in await db_calls.open_calls(sf):
+        bars = bars_by.get(c["symbol"]) or await _adj_bars_from_db(sf, c["symbol"], source)
+        if not bars:
+            continue
+        res = outcomes_math.stated_call_outcome(
+            bars, stated_at=c["stated_at"], direction=c["direction"], entry=c["entry"],
+            stop=c["stop"], targets=c["targets"], horizon_days=c["horizon_days"],
+        )
+        if res is None:
+            continue  # still open
+        await db_calls.close_call(
+            sf, call_id=c["id"], reason=res["reason"], realized_r=res["realized_r"],
+            realized_pct=res["realized_pct"],
+            closed_at=datetime.fromtimestamp(res["closed_ts"], tz=timezone.utc),
+        )
+        stated_closed += 1
+    return {
+        "computed": computed, "pending": len(pend) - computed,
+        "symbols": len(symbols), "stated_closed": stated_closed,
+    }
+
+
+async def _adj_bars_from_db(sf, symbol: str, source: str) -> list[dict]:
+    """Cached adjusted bars (saved by run_outcomes) as plain dicts."""
+    from .db import bars as db_bars
+
+    rows = await db_bars.load_bars(sf, symbol=symbol, interval="1d", source=source)
+    return [{"ts": b.ts, "o": float(b.o), "h": float(b.h), "l": float(b.l), "c": float(b.c)} for b in rows]
+
+
+def _fmt_level(v: float | None) -> str:
+    return "market" if v is None else f"{v:,.2f}"
+
+
+async def run_call_scan(
+    sf, extractor, notifier: AlertNotifier | None = None,
+    *, batch: int = 40, min_confidence: float = 0.6,
+) -> dict:
+    """M9-C rolling scan: extract explicit calls from posts not yet scanned —
+    backfills the whole history in batches, then keeps up with new posts.
+    A post that errors is left unscanned and retried next cycle."""
+    posts = await db_calls.unscanned_posts(sf, limit=batch)
+    if not posts:
+        return {"scanned": 0, "calls": 0}
+
+    scanned_ids: list[int] = []
+    saved = 0
+    for post in posts:
+        try:
+            extraction = await extractor(post["text"])
+        except Exception as exc:  # noqa: BLE001 - retry this post next cycle
+            log.warning("call scan failed for post %s: %s", post["id"], exc)
+            continue
+        scanned_ids.append(post["id"])
+        if not extraction.has_call:
+            continue
+        for call in extraction.calls:
+            sym = call.symbol.strip().lstrip("$").upper()
+            if not sym or call.confidence < min_confidence:
+                continue
+            created = await db_calls.save_call(
+                sf, post_id=post["id"], account_id=post["account_id"], symbol=sym,
+                direction=call.direction, entry=call.entry, stop=call.stop,
+                targets=list(call.targets or []), horizon_raw=call.horizon,
+                horizon_days=_horizon_days(call.horizon), is_option=call.is_option,
+                confidence=call.confidence, stated_at=post["posted_at"],
+            )
+            if not created:
+                continue
+            saved += 1
+            if notifier is not None:
+                t1 = call.targets[0] if call.targets else None
+                handle = post["handle"] or "source"
+                url = f"https://x.com/{handle}/status/{post['platform_post_id']}"
+                snippet = " ".join((post["text"] or "").split())[:160]
+                mdv2 = (
+                    f"\U0001F3AF *Stated call* · `{md_code('$' + sym)}` · "
+                    f"*{md(call.direction.upper())}* by @{md(handle)}\n"
+                    f"entry `{md_code(_fmt_level(call.entry))}` · stop `{md_code(_fmt_level(call.stop) if call.stop else '—')}` · "
+                    f"target `{md_code(_fmt_level(t1) if t1 else '—')}`\n"
+                    f"“_{md(snippet)}_”\n"
+                    f"[\U0001F517 Post]({url})\n\n_Tracked for the scoreboard · not financial advice_"
+                )
+                plain = (
+                    f"[STATED CALL] ${sym} {call.direction.upper()} by @{handle}\n"
+                    f"entry {_fmt_level(call.entry)} | stop {_fmt_level(call.stop) if call.stop else '-'} | "
+                    f"target {_fmt_level(t1) if t1 else '-'}\n\"{snippet}\"\n{url}"
+                )
+                await notifier.broadcast_text(
+                    idempotency_key=f"XCALL:{post['id']}:{sym}", mdv2=mdv2, plain=plain
+                )
+    await db_calls.mark_scanned(sf, scanned_ids)
+    return {"scanned": len(scanned_ids), "calls": saved, "remaining_batch": len(posts) - len(scanned_ids)}
+
+
+def _horizon_days(raw: str | None) -> int:
+    from .extract.calls_llm import horizon_days
+
+    return horizon_days(raw)
 
 
 def _recommend_inputs(analyzer: Analyzer, now_ts: float, config: RiskConfig) -> list[dict]:

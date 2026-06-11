@@ -15,6 +15,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 
 from ..db import analytics, repo, scoreboard
+from ..db import calls as db_calls
 from . import service
 
 HELP = (
@@ -38,9 +39,9 @@ def _pct(v: float | None) -> str:
     return "—" if v is None else f"{v * 100:+.1f}%"
 
 
-def _fmt_scoreboard(board: dict, days: int) -> str:
+def _fmt_scoreboard(board: dict, days: int, stated: dict | None = None) -> str:
     lines = [f"\U0001F3C6 Scoreboard — last {days}d, edge vs SPY (3-day horizon)"]
-    if not board["ranked"] and not board["thin"]:
+    if not board["ranked"] and not board["thin"] and not stated:
         return ("No scored mentions yet. Outcomes are computed from daily closes, "
                 "so fresh mentions need 1-5 trading days to grade. Check back tomorrow.")
     for i, a in enumerate(board["ranked"], 1):
@@ -52,15 +53,40 @@ def _fmt_scoreboard(board: dict, days: int) -> str:
     if board["thin"]:
         thin = ", ".join(f"@{a['handle']} (n={a['n']})" for a in board["thin"])
         lines.append(f"thin sample, not ranked: {thin}")
+    if stated:
+        lines.append("\U0001F3AF stated calls:")
+        for handle, s in sorted(stated.items(), key=lambda kv: -(kv[1]["closed"] + kv[1]["open"])):
+            bits = [f"{s['closed']} closed"]
+            if s["hit"] is not None:
+                bits.append(f"hit {s['hit'] * 100:.0f}%")
+            if s["avg_r"] is not None:
+                bits.append(f"avg {s['avg_r']:+.1f}R")
+            elif s["avg_pct"] is not None:
+                bits.append(f"avg {_pct(s['avg_pct'])}")
+            if s["open"]:
+                bits.append(f"{s['open']} open")
+            lines.append(f"  @{handle}: " + " · ".join(bits))
     lines.append("Edge = benchmark-adjusted move in the direction they called. Not financial advice.")
     return "\n".join(lines)
 
 
-def _fmt_account(detail: dict, days: int) -> str:
+def _fmt_account(detail: dict, days: int, stated: dict | None = None) -> str:
     s = detail["stats"]
-    if s is None:
+    if s is None and not stated:
         return (f"No scored mentions for @{detail['handle']} in the last {days}d. "
                 "Either they were quiet, or their mentions are <1 trading day old.")
+    if s is None:
+        lines = [f"@{detail['handle']} · last {days}d", "no graded mentions yet"]
+        st = stated
+        bits = [f"{st['closed']} closed"]
+        if st["hit"] is not None:
+            bits.append(f"hit {st['hit'] * 100:.0f}%")
+        if st["avg_r"] is not None:
+            bits.append(f"avg {st['avg_r']:+.1f}R")
+        if st["open"]:
+            bits.append(f"{st['open']} open")
+        lines.append("\U0001F3AF stated calls: " + " · ".join(bits))
+        return "\n".join(lines)
     hit = f"{s['hit_3d'] * 100:.0f}%" if s["hit_3d"] is not None else "—"
     lines = [
         f"@{s['handle']} · {s['tier']} · last {days}d",
@@ -70,6 +96,17 @@ def _fmt_account(detail: dict, days: int) -> str:
     if s["best"]:
         lines.append(f"best: ${s['best']['symbol']} {_pct(s['best']['edge'])} · "
                      f"worst: ${s['worst']['symbol']} {_pct(s['worst']['edge'])}")
+    if stated:
+        bits = [f"{stated['closed']} closed"]
+        if stated["hit"] is not None:
+            bits.append(f"hit {stated['hit'] * 100:.0f}%")
+        if stated["avg_r"] is not None:
+            bits.append(f"avg {stated['avg_r']:+.1f}R")
+        elif stated["avg_pct"] is not None:
+            bits.append(f"avg {_pct(stated['avg_pct'])}")
+        if stated["open"]:
+            bits.append(f"{stated['open']} open")
+        lines.append("\U0001F3AF stated calls: " + " · ".join(bits))
     if detail["recent"]:
         lines.append("recent:")
         for t in detail["recent"]:
@@ -238,19 +275,21 @@ async def handle_command(text: str, from_id: int, sf, admin_ids: list[int], *, m
 
         if cmd == "scoreboard":
             days = int(args[0]) if args and args[0].isdigit() else 30
-            board = await scoreboard.account_scoreboard(
-                sf, since=datetime.now(timezone.utc) - timedelta(days=days)
-            )
-            return _fmt_scoreboard(board, days)
+            since = datetime.now(timezone.utc) - timedelta(days=days)
+            board = await scoreboard.account_scoreboard(sf, since=since)
+            stated = await db_calls.stated_stats(sf, since=since)
+            return _fmt_scoreboard(board, days, stated or None)
 
         if cmd == "account":
             if not args:
                 return "Usage: /account <handle> [days]"
             days = int(args[1]) if len(args) > 1 and args[1].isdigit() else 60
-            detail = await scoreboard.account_detail(
-                sf, handle=args[0], since=datetime.now(timezone.utc) - timedelta(days=days)
-            )
-            return _fmt_account(detail, days)
+            since = datetime.now(timezone.utc) - timedelta(days=days)
+            handle = args[0].lstrip("@")
+            detail = await scoreboard.account_detail(sf, handle=handle, since=since)
+            stated_all = await db_calls.stated_stats(sf, since=since)
+            stated = next((v for k, v in stated_all.items() if k.lower() == handle.lower()), None)
+            return _fmt_account(detail, days, stated)
 
         if cmd == "pause":
             mode = killswitch.PAUSE_FULL if (args and args[0].lower() == "full") else killswitch.PAUSE_BROADCAST

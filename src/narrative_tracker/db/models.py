@@ -156,6 +156,42 @@ class MentionOutcome(Base):
     computed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
 
 
+class ExplicitCall(Base):
+    """M9-C: a trade the account STATED, recorded verbatim and scored on its
+    own terms — the public accountability ledger for fintwit calls."""
+
+    __tablename__ = "explicit_calls"
+    __table_args__ = (UniqueConstraint("post_id", "symbol", name="uq_call_post_symbol"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    post_id: Mapped[int] = mapped_column(ForeignKey("posts.id"), index=True)
+    account_id: Mapped[int] = mapped_column(ForeignKey("accounts.id"), index=True)
+    symbol: Mapped[str] = mapped_column(String(24), index=True)
+    direction: Mapped[str] = mapped_column(String(5))  # long|short
+    entry: Mapped[float | None] = mapped_column(Float, nullable=True)   # None = at-market (anchor close)
+    stop: Mapped[float | None] = mapped_column(Float, nullable=True)
+    targets: Mapped[list] = mapped_column(JSON, default=list)
+    horizon_raw: Mapped[str | None] = mapped_column(String(48), nullable=True)
+    horizon_days: Mapped[int] = mapped_column(default=10)  # trading days to timeout
+    is_option: Mapped[bool] = mapped_column(Boolean, default=False)
+    confidence: Mapped[float] = mapped_column(Float, default=0.5)
+    stated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    status: Mapped[str] = mapped_column(String(12), default="open", index=True)
+    close_reason: Mapped[str | None] = mapped_column(String(16), nullable=True)  # stop|target|timeout
+    realized_r: Mapped[float | None] = mapped_column(Float, nullable=True)    # only when a stop was stated
+    realized_pct: Mapped[float | None] = mapped_column(Float, nullable=True)  # direction-signed move
+    closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+
+class CallScanCursor(Base):
+    """Posts already scanned for explicit calls (drives the rolling backfill)."""
+
+    __tablename__ = "call_scan_cursor"
+
+    post_id: Mapped[int] = mapped_column(ForeignKey("posts.id"), primary_key=True)
+
+
 class WatchedTicker(Base):
     """User's per-ticker watchlist: 🔔 on alerts + always in the pulse deep-dive."""
 

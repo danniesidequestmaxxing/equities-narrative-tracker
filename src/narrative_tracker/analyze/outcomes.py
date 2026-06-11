@@ -56,6 +56,65 @@ def forward_returns(
     return {"px_post": px, "fwd": fwd}
 
 
+def stated_call_outcome(
+    bars: list[dict],
+    *,
+    stated_at: datetime,
+    direction: str,
+    entry: float | None,
+    stop: float | None,
+    targets: list[float],
+    horizon_days: int = 10,
+) -> dict | None:
+    """Score a stated call against the daily path: which came first — their
+    stop, their first target, or the timeout?
+
+    Entry defaults to the anchor close when unstated ("long $X" with no price).
+    ``realized_r`` (profit in units of stated risk) only exists when a sane stop
+    was given; ``realized_pct`` (direction-signed move from entry) always does.
+    Conservative tie-break: a bar that touches both stop and target counts as a
+    stop. Returns None while the call is still open (not enough bars yet).
+    """
+    i = anchor_index(bars, stated_at)
+    if i is None:
+        return None
+    sign = 1 if direction == "long" else -1
+    e = float(entry) if entry else float(bars[i]["c"])
+    if e <= 0:
+        return None
+    t1 = float(targets[0]) if targets else None
+    risk = (e - float(stop)) * sign if stop is not None else None
+    if risk is not None and risk <= 0:
+        risk = None  # stop on the wrong side of entry -> score directional-only
+
+    def _result(reason: str, exit_px: float, ts: int) -> dict:
+        pct = (exit_px / e - 1) * sign
+        return {
+            "reason": reason,
+            "realized_pct": round(pct, 6),
+            "realized_r": round((exit_px - e) * sign / risk, 4) if risk else None,
+            "closed_ts": int(ts),
+        }
+
+    last = min(i + horizon_days, len(bars) - 1)
+    for j in range(i + 1, last + 1):
+        b = bars[j]
+        hit_stop = stop is not None and (
+            float(b["l"]) <= float(stop) if sign > 0 else float(b["h"]) >= float(stop)
+        )
+        hit_target = t1 is not None and (
+            float(b["h"]) >= t1 if sign > 0 else float(b["l"]) <= t1
+        )
+        if hit_stop:
+            return _result("stop", float(stop), b["ts"])
+        if hit_target:
+            return _result("target", t1, b["ts"])
+    if i + horizon_days < len(bars):
+        b = bars[i + horizon_days]
+        return _result("timeout", float(b["c"]), b["ts"])
+    return None  # horizon not reached yet
+
+
 def signed_excess(stance: str, fwd: float | None, bench: float | None) -> float | None:
     """The 'edge if you traded their direction' number: benchmark-adjusted
     return, sign-flipped for bearish takes. None for neutral/unclear stances
