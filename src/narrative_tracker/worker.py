@@ -287,7 +287,9 @@ async def main() -> None:  # pragma: no cover - prod entrypoint
         from .db.bars import DbBarsProvider, DbLedgerProvider
         from .enrich.polygon import PolygonMarketData, build_polygon_fetch
 
-        market = PolygonMarketData(fetch=build_polygon_fetch(settings.polygon_api_key))
+        market = PolygonMarketData(
+            fetch=build_polygon_fetch(settings.polygon_api_key, base_url=settings.polygon_base_url)
+        )
         config = RiskConfig()
         bars_provider = DbBarsProvider(session_factory)
         ledger_provider = DbLedgerProvider(session_factory)

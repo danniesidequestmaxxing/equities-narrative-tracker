@@ -36,8 +36,10 @@ class Settings(BaseSettings):
     telegram_ops_chat_id: int | None = None
     admin_ids: str = ""  # comma-separated Telegram user ids allowed to run /admin commands
 
-    # Market data (Polygon / "Massive"). Empty -> recommend + scoring stay disabled.
+    # Market data (Massive, formerly Polygon.io — keys work on both domains).
+    # Empty -> recommend + scoring + pulse TA stay disabled.
     polygon_api_key: str | None = None
+    polygon_base_url: str = "https://api.massive.com"  # legacy api.polygon.io also works
 
     # Paper-trade mode: generate + score calls but DO NOT broadcast to the group.
     # Default ON — flip to false only after a paper-trading period proves accuracy.
