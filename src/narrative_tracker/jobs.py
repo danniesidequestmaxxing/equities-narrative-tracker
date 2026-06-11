@@ -80,20 +80,27 @@ async def run_pulse(
     early = pulse_mod.early_radar(window, prior_week, window_hours=hours)
     recap = pulse_mod.account_recap(window)
 
-    # TA + fundamentals on the top chartable (equity) names.
+    # TA + fundamentals: user-watched tickers first (always included), then the
+    # top chartable (equity) names from the window.
+    watched = (await repo.watched_tickers(sf))[:5]
     deep_dives: list[dict] = []
     if market is not None:
+        candidates: list[tuple[str, bool]] = [(s, True) for s in watched]
         for t in hot:
-            if t["asset_class"] != "equity" or len(deep_dives) >= deep_dive_n:
-                continue
+            if t["asset_class"] == "equity" and t["symbol"] not in watched:
+                candidates.append((t["symbol"], False))
+        cap = max(deep_dive_n, len(watched))
+        for sym, is_watched in candidates:
+            if len(deep_dives) >= cap:
+                break
             try:
-                ta = snapshot_from_bars(await market.fetch_bars(t["symbol"], days=400, adjusted=True))
+                ta = snapshot_from_bars(await market.fetch_bars(sym, days=400, adjusted=True))
                 if ta is None:
                     continue
-                overview = await market.fetch_overview(t["symbol"])
-                deep_dives.append({"symbol": t["symbol"], "ta": ta, **overview})
+                overview = await market.fetch_overview(sym)
+                deep_dives.append({"symbol": sym, "ta": ta, "watched": is_watched, **overview})
             except Exception as exc:  # noqa: BLE001 - one symbol must not kill the pulse
-                log.warning("pulse deep-dive failed for %s: %s", t["symbol"], exc)
+                log.warning("pulse deep-dive failed for %s: %s", sym, exc)
 
     brief = None
     if writer is not None:

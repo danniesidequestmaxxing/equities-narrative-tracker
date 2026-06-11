@@ -314,7 +314,8 @@ def build_pulse(
                 bits.append(f"vol {ta['vol_ratio']:.1f}x")
             if ta.get("off_high_pct") is not None:
                 bits.append(f"{ta['off_high_pct']:.0f}% off 52w high")
-            L.append(f"`{md_code('$' + d['symbol'])}` {md(_fmt_px(ta['price']))} · {md(' · '.join(bits))}")
+            bell = "\U0001f514 " if d.get("watched") else ""  # 🔔 user-watched
+            L.append(f"{bell}`{md_code('$' + d['symbol'])}` {md(_fmt_px(ta['price']))} · {md(' · '.join(bits))}")
             fund = [x for x in (d.get("sector"), _mcap(d.get("market_cap") or 0.0)) if x and x != "—"]
             levels = f"sup {_fmt_px(ta['support'])} / res {_fmt_px(ta['resistance'])}"
             L.append(f"   _{md(' · '.join(fund + [levels]))}_")

@@ -39,3 +39,11 @@ def test_alert_truncates_long_text():
 def test_post_url_falls_back_to_profile():
     post = _post("$NVDA", post_id="")
     assert post_url(post) == "https://x.com/aleabitoreddit"
+
+
+def test_watched_ticker_gets_bell():
+    post = _post("$NVDA breaking out")
+    mdv2, plain = build_alert(post, _mention("NVDA"), watched=True)
+    assert mdv2.startswith("🔔") and "[WATCHED]" in plain
+    mdv2_un, plain_un = build_alert(post, _mention("NVDA"))
+    assert not mdv2_un.startswith("🔔") and "[WATCHED]" not in plain_un

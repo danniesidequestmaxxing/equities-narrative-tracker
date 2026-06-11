@@ -129,6 +129,17 @@ class AuditLog(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
 
 
+class WatchedTicker(Base):
+    """User's per-ticker watchlist: 🔔 on alerts + always in the pulse deep-dive."""
+
+    __tablename__ = "watched_tickers"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    symbol: Mapped[str] = mapped_column(String(24), unique=True, index=True)
+    active: Mapped[bool] = mapped_column(default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+
 # --- M2: narratives + sentiment -------------------------------------------
 
 

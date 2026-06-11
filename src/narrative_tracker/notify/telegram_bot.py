@@ -18,7 +18,7 @@ from typing import Any, Protocol
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from ..db import idempotency
+from ..db import idempotency, repo
 from ..ingest.provider import RawPost
 from ..schemas.call import Direction, TradeCall
 from ..schemas.mention import Mention, OptionDetail, Stance
@@ -94,11 +94,12 @@ def _option_str(od: OptionDetail) -> str:
     return f"{core} {od.expiry_raw}" if od.expiry_raw else core
 
 
-def build_alert(post: RawPost, mention: Mention) -> tuple[str, str]:
+def build_alert(post: RawPost, mention: Mention, *, watched: bool = False) -> tuple[str, str]:
     """Return ``(markdown_v2, plain)`` for a single ticker alert.
 
     Always quotes the post text and deep-links the exact post — every alert
     carries its receipt, so a surprising ticker can be verified at a glance.
+    ``watched`` pins a 🔔 on tickers from the user's /watch list.
     """
     symbol = mention.symbol
     tv = tradingview_url(symbol)
@@ -109,8 +110,9 @@ def build_alert(post: RawPost, mention: Mention) -> tuple[str, str]:
     header = f"${symbol}{opt}"
     type_tag = _POST_TYPE_TAG.get(post.post_type, "")
     snippet = _snippet(post.text)
+    bell = "\U0001f514 " if watched else ""  # 🔔
     mdv2 = (
-        f"⚡ *{md(header)}* · {emoji} {md(mention.stance.value)} · {md(asset)}\n"
+        f"{bell}⚡ *{md(header)}* · {emoji} {md(mention.stance.value)} · {md(asset)}\n"
         f"[{md('@' + (post.handle or 'source'))}]({md_url(link)}) · "
         f"{md(type_tag)}{md(post.posted_at.strftime('%H:%M ET'))}\n"
         f"“_{md(snippet)}_”\n"
@@ -119,7 +121,7 @@ def build_alert(post: RawPost, mention: Mention) -> tuple[str, str]:
         f"_Derived signal · not financial advice_"
     )
     plain = (
-        f"[ALERT] ${symbol}{opt} {mention.stance.value} ({asset})\n"
+        f"{'[WATCHED] ' if watched else ''}[ALERT] ${symbol}{opt} {mention.stance.value} ({asset})\n"
         f"@{post.handle or 'source'} {type_tag}at {post.posted_at.strftime('%H:%M ET')}\n"
         f'"{snippet}"\n'
         f"{link}\n{tv}\n"
@@ -164,7 +166,8 @@ class AlertNotifier:
             log.debug("alert already claimed, skipping: %s", key)
             return False
 
-        mdv2, plain = build_alert(post, mention)
+        watched = await repo.is_watched(self._sf, mention.symbol)
+        mdv2, plain = build_alert(post, mention, watched=watched)
         message_id = await self._safe_send(mdv2, plain)
         await idempotency.mark_sent(
             self._sf, idempotency_key=key, telegram_message_id=message_id

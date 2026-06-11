@@ -7,7 +7,7 @@ import logging
 log = logging.getLogger(__name__)
 
 
-async def run_admin_bot(bot, sf, admin_ids: list[int]) -> None:  # pragma: no cover
+async def run_admin_bot(bot, sf, admin_ids: list[int], *, market=None) -> None:  # pragma: no cover
     from aiogram import Dispatcher
     from aiogram.types import Message
 
@@ -17,10 +17,11 @@ async def run_admin_bot(bot, sf, admin_ids: list[int]) -> None:  # pragma: no co
 
     @dp.message()
     async def _on_message(message: Message) -> None:
-        if not message.text or not message.text.startswith("/"):
+        # Seamless input: /commands, @handle (track account), $TICKER (brief/watch).
+        if not message.text or message.text[0] not in "/@$":
             return
         from_id = message.from_user.id if message.from_user else 0
-        reply = await handle_command(message.text, from_id, sf, admin_ids)
+        reply = await handle_command(message.text, from_id, sf, admin_ids, market=market)
         await message.answer(reply)
 
     log.info("admin command listener started (%d admin id(s))", len(admin_ids))

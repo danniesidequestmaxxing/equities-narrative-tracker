@@ -345,7 +345,9 @@ async def main() -> None:  # pragma: no cover - prod entrypoint
     # Live admin-command listener (/addsource etc.) alongside the worker.
     from .admin.bot import run_admin_bot
 
-    admin_task = asyncio.create_task(run_admin_bot(bot, session_factory, settings.admin_id_list))
+    admin_task = asyncio.create_task(
+        run_admin_bot(bot, session_factory, settings.admin_id_list, market=market)
+    )
     try:
         await worker.run()
     finally:

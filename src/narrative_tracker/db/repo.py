@@ -143,6 +143,63 @@ async def get_account_id(
         )
 
 
+# --- per-ticker watchlist (🔔 alerts + guaranteed pulse deep-dive) -----------
+
+
+def _norm_symbol(symbol: str) -> str:
+    return symbol.strip().lstrip("$").upper()
+
+
+async def watch_ticker(session_factory: async_sessionmaker[AsyncSession], symbol: str) -> str:
+    from .models import WatchedTicker
+
+    sym = _norm_symbol(symbol)
+    async with session_factory() as session:
+        row = await session.scalar(select(WatchedTicker).where(WatchedTicker.symbol == sym))
+        if row is None:
+            session.add(WatchedTicker(symbol=sym, active=True))
+        else:
+            row.active = True
+        await session.commit()
+    return sym
+
+
+async def unwatch_ticker(session_factory: async_sessionmaker[AsyncSession], symbol: str) -> bool:
+    from .models import WatchedTicker
+
+    sym = _norm_symbol(symbol)
+    async with session_factory() as session:
+        row = await session.scalar(select(WatchedTicker).where(WatchedTicker.symbol == sym))
+        if row is None or not row.active:
+            return False
+        row.active = False
+        await session.commit()
+    return True
+
+
+async def watched_tickers(session_factory: async_sessionmaker[AsyncSession]) -> list[str]:
+    from .models import WatchedTicker
+
+    async with session_factory() as session:
+        rows = await session.scalars(
+            select(WatchedTicker.symbol).where(WatchedTicker.active.is_(True)).order_by(WatchedTicker.id)
+        )
+        return list(rows)
+
+
+async def is_watched(session_factory: async_sessionmaker[AsyncSession], symbol: str) -> bool:
+    from .models import WatchedTicker
+
+    async with session_factory() as session:
+        return bool(
+            await session.scalar(
+                select(WatchedTicker.id).where(
+                    WatchedTicker.symbol == _norm_symbol(symbol), WatchedTicker.active.is_(True)
+                )
+            )
+        )
+
+
 async def get_credibility(
     session_factory: async_sessionmaker[AsyncSession],
     *,

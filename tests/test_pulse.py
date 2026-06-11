@@ -195,3 +195,14 @@ async def test_run_pulse_degrades_without_market_or_llm(session_factory, fake_bo
     out = await jobs.run_pulse(session_factory, notifier, now=NOW, writer=broken_writer)
     assert out["broadcast"] is True and out["llm"] is False and out["deep_dives"] == 0
     assert "Pulse" in fake_bot.sent[0]["text"]  # still delivered, fallback narrative
+
+
+async def test_run_pulse_always_deep_dives_watched_tickers(session_factory, fake_bot):
+    await _seed(session_factory)
+    await repo.watch_ticker(session_factory, "$AMD")  # watched but NOT mentioned this window
+    notifier = AlertNotifier(bot=fake_bot, session_factory=session_factory, trading_chat_id=7)
+
+    out = await jobs.run_pulse(session_factory, notifier, now=NOW, market=FakeMarket())
+    assert out["broadcast"] is True
+    text = fake_bot.sent[0]["text"]
+    assert "AMD" in text and "🔔" in text  # pinned into the deep-dive despite zero mentions
