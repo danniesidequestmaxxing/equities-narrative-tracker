@@ -26,6 +26,7 @@ from datetime import datetime, timezone
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from .analyze.analyzer import Analyzer
+from .db import calls as db_calls
 from .db import idempotency, repo
 from .extract.pipeline import ExtractionPipeline
 from .ingest.buffer import IngestBuffer
@@ -97,12 +98,45 @@ async def process_post(
                     asset_class=m.asset_class.value,
                 )
 
+    if is_new and post.metrics:
+        # M10: at-ingest engagement snapshot — raw tape for crowdedness analytics.
+        await repo.save_engagement(session_factory, post_id=post_id, metrics=post.metrics)
+
     alerts_sent = 0
     for mention in mentions:
         if mention.mention_confidence < min_confidence:
             continue
         if await notifier.send_alert(post, mention):
             alerts_sent += 1
+
+    # M10: reversal detection — the account flipped direction on a name, or is
+    # talking against their own open stated call. Runs on every sighting (the
+    # send is idempotent), matching the alert recovery posture.
+    for mention in mentions:
+        if mention.stance.value not in ("bullish", "bearish") or mention.stance_confidence < 0.6:
+            continue
+        prior = await repo.last_stance(
+            session_factory, account_id=account_id, symbol=mention.symbol, before=post.posted_at
+        )
+        open_call = await db_calls.open_call_for(
+            session_factory, account_id=account_id, symbol=mention.symbol
+        )
+        flipped = (
+            prior is not None
+            and prior["stance"] != mention.stance.value
+            and (prior["stance_confidence"] or 0) >= 0.6
+        )
+        against_call = open_call is not None and (
+            (open_call["direction"] == "long") == (mention.stance.value == "bearish")
+        )
+        if not flipped and not against_call:
+            continue
+        use_prior = prior if flipped else {
+            "stance": "bullish" if open_call["direction"] == "long" else "bearish",
+            "posted_at": open_call["stated_at"],
+            "stance_confidence": 1.0,
+        }
+        await notifier.send_reversal(post, mention, use_prior, open_call if against_call else None)
 
     if is_new:
         await repo.record_audit(

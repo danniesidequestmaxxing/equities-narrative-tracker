@@ -74,7 +74,7 @@ async def outcomes_for_accounts(
             MentionOutcome.symbol, MentionOutcome.stance, MentionOutcome.posted_at,
             MentionOutcome.fwd_1d, MentionOutcome.fwd_3d, MentionOutcome.fwd_5d,
             MentionOutcome.bench_1d, MentionOutcome.bench_3d, MentionOutcome.bench_5d,
-            Account.handle, Account.tier,
+            MentionOutcome.account_id, Account.handle, Account.tier,
         )
         .join(Account, MentionOutcome.account_id == Account.id)
         .where(MentionOutcome.posted_at >= since)

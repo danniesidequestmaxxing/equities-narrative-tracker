@@ -143,6 +143,81 @@ async def get_account_id(
         )
 
 
+async def save_engagement(
+    session_factory: async_sessionmaker[AsyncSession], *, post_id: int, metrics: dict
+) -> None:
+    """At-ingest engagement snapshot (idempotent on post_id)."""
+    from .models import PostEngagement
+
+    async with session_factory() as session:
+        if await session.get(PostEngagement, post_id) is not None:
+            return
+        session.add(PostEngagement(
+            post_id=post_id,
+            likes=int(metrics.get("likes", 0)),
+            retweets=int(metrics.get("retweets", 0)),
+            replies=int(metrics.get("replies", 0)),
+            views=int(metrics.get("views", 0)),
+        ))
+        await session.commit()
+
+
+async def last_stance(
+    session_factory: async_sessionmaker[AsyncSession],
+    *,
+    account_id: int,
+    symbol: str,
+    before: datetime,
+    within_days: int = 21,
+) -> dict | None:
+    """The account's most recent directional take on a symbol before ``before``
+    (reversal detection input). Only bullish/bearish count — neutral isn't a
+    position to reverse from."""
+    from datetime import timedelta
+
+    from .models import Post, TickerMention
+
+    stmt = (
+        select(TickerMention.stance, TickerMention.stance_confidence, Post.posted_at)
+        .join(Post, TickerMention.post_id == Post.id)
+        .where(
+            Post.account_id == account_id,
+            TickerMention.symbol == symbol,
+            TickerMention.stance.in_(("bullish", "bearish")),
+            Post.posted_at < before,
+            Post.posted_at >= before - timedelta(days=within_days),
+        )
+        .order_by(Post.posted_at.desc())
+        .limit(1)
+    )
+    async with session_factory() as session:
+        row = (await session.execute(stmt)).first()
+    return dict(row._mapping) if row else None
+
+
+async def latest_account_scores(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> dict[int, float]:
+    """Latest credibility score per account (evidence-weighted when M9 stats
+    exist). Small table — fetch ordered, last write wins."""
+    from .models import AccountScore
+
+    async with session_factory() as session:
+        rows = await session.execute(
+            select(AccountScore.account_id, AccountScore.decayed_score).order_by(AccountScore.as_of)
+        )
+        out: dict[int, float] = {}
+        for account_id, score in rows:
+            out[account_id] = float(score)
+        return out
+
+
+async def all_accounts(session_factory: async_sessionmaker[AsyncSession]) -> list[dict]:
+    async with session_factory() as session:
+        rows = await session.scalars(select(Account))
+        return [{"id": a.id, "handle": a.handle, "tier": a.tier} for a in rows]
+
+
 # --- per-ticker watchlist (🔔 alerts + guaranteed pulse deep-dive) -----------
 
 

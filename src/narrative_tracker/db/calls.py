@@ -84,6 +84,27 @@ async def open_calls(sf: async_sessionmaker[AsyncSession]) -> list[dict]:
     ]
 
 
+async def open_call_for(
+    sf: async_sessionmaker[AsyncSession], *, account_id: int, symbol: str
+) -> dict | None:
+    """The account's open stated call on a symbol, if any (reversal context)."""
+    async with sf() as session:
+        c = await session.scalar(
+            select(ExplicitCall)
+            .where(
+                ExplicitCall.account_id == account_id,
+                ExplicitCall.symbol == symbol,
+                ExplicitCall.status == "open",
+            )
+            .order_by(ExplicitCall.id.desc())
+            .limit(1)
+        )
+    if c is None:
+        return None
+    return {"direction": c.direction, "entry": c.entry, "targets": c.targets or [],
+            "stop": c.stop, "stated_at": c.stated_at}
+
+
 async def close_call(
     sf: async_sessionmaker[AsyncSession], *, call_id: int, reason: str,
     realized_r: float | None, realized_pct: float | None, closed_at: datetime,

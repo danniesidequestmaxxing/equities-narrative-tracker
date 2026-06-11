@@ -63,6 +63,31 @@ async def account_scoreboard(sf, *, since: datetime, min_n: int = MIN_RANKED_N) 
     return _aggregate(rows, min_n=min_n)
 
 
+def _detail_splits(rows: list[dict]) -> dict:
+    """M10-4: per-symbol edges + first-mention vs repeat-mention split (3d)."""
+    by_symbol: dict[str, list[float]] = defaultdict(list)
+    firsts: list[float] = []
+    repeats: list[float] = []
+    seen: set[str] = set()
+    for r in sorted(rows, key=lambda r: r["posted_at"]):
+        first = r["symbol"] not in seen
+        seen.add(r["symbol"])
+        e = signed_excess(r["stance"], r.get("fwd_3d"), r.get("bench_3d"))
+        if e is None:
+            continue
+        by_symbol[r["symbol"]].append(e)
+        (firsts if first else repeats).append(e)
+
+    def _avg(vals):
+        return {"n": len(vals), "avg": round(sum(vals) / len(vals), 4)} if vals else None
+
+    symbols = sorted(
+        ({"symbol": s, "n": len(v), "avg": round(sum(v) / len(v), 4)} for s, v in by_symbol.items()),
+        key=lambda x: (-x["n"], -x["avg"]),
+    )[:3]
+    return {"by_symbol": symbols, "first": _avg(firsts), "repeat": _avg(repeats)}
+
+
 async def account_detail(sf, *, handle: str, since: datetime, recent: int = 6) -> dict:
     rows = [
         r for r in await db_outcomes.outcomes_for_accounts(sf, since=since)
@@ -78,4 +103,5 @@ async def account_detail(sf, *, handle: str, since: datetime, recent: int = 6) -
         }
         for r in rows[:recent]
     ]
-    return {"handle": handle.lstrip("@"), "stats": stats, "recent": takes}
+    return {"handle": handle.lstrip("@"), "stats": stats, "recent": takes,
+            "splits": _detail_splits(rows)}

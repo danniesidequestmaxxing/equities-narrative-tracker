@@ -70,6 +70,19 @@ def _fmt_scoreboard(board: dict, days: int, stated: dict | None = None) -> str:
     return "\n".join(lines)
 
 
+def _decay_note(s: dict) -> str | None:
+    """Where does the edge peak? -> hold-time guidance."""
+    vals = {h: s.get(f"avg_{h}d") for h in (1, 3, 5) if s.get(f"avg_{h}d") is not None}
+    if len(vals) < 2:
+        return None
+    peak = max(vals, key=vals.get)
+    if peak == 1:
+        return "edge is front-loaded — fades after day 1, act fast"
+    if peak == 5:
+        return "edge compounds — they're early; 5d+ holds paid best"
+    return "edge peaks around day 3"
+
+
 def _fmt_account(detail: dict, days: int, stated: dict | None = None) -> str:
     s = detail["stats"]
     if s is None and not stated:
@@ -96,6 +109,17 @@ def _fmt_account(detail: dict, days: int, stated: dict | None = None) -> str:
     if s["best"]:
         lines.append(f"best: ${s['best']['symbol']} {_pct(s['best']['edge'])} · "
                      f"worst: ${s['worst']['symbol']} {_pct(s['worst']['edge'])}")
+    decay = _decay_note(s)
+    if decay:
+        lines.append(f"⏱ {decay}")
+    splits = detail.get("splits") or {}
+    if splits.get("by_symbol"):
+        lines.append("by symbol: " + " · ".join(
+            f"${b['symbol']} n={b['n']} {_pct(b['avg'])}" for b in splits["by_symbol"]))
+    fr, rp = splits.get("first"), splits.get("repeat")
+    if fr and rp:
+        note = " — their first call carries the alpha" if fr["avg"] > rp["avg"] else ""
+        lines.append(f"first mentions {_pct(fr['avg'])} (n={fr['n']}) vs repeats {_pct(rp['avg'])} (n={rp['n']}){note}")
     if stated:
         bits = [f"{stated['closed']} closed"]
         if stated["hit"] is not None:

@@ -78,3 +78,52 @@ def recompute_credibility(
         gate = sw / (sw + m_reliab)                            # reliability gate
         cred[acct] = round((p_hat ** theta) * max(e_sh, 0.0) * gate + floor, 6)
     return cred
+
+
+# --- M10: evidence-weighted credibility (fuses the M9 alpha ledger) ----------
+
+
+def _clamp(v: float, lo: float, hi: float) -> float:
+    return max(lo, min(hi, v))
+
+
+def evidence_credibility(
+    tier: str,
+    *,
+    event_n: int = 0,
+    event_edge: float | None = None,
+    stated_n: int = 0,
+    stated_avg_r: float | None = None,
+    stated_hit: float | None = None,
+) -> float:
+    """Blend the tier prior with M9 evidence, shrunk by sample size.
+
+    Two evidence streams, weakest to strongest:
+    * event-study: avg direction-signed 3-day excess return per mention
+      (weight grows as n/(n+8) — eight mentions earn half a say);
+    * stated calls: avg realized R (or hit rate when no stops were stated) —
+      each closed stated call counts double an ordinary mention, because a
+      stated trade is the truest skill signal.
+
+    With zero evidence this returns the tier prior unchanged; with mountains
+    of evidence the prior washes out. Output clamped to [0.05, 0.95] so no
+    account is ever silenced or deified.
+    """
+    from ..analyze.sentiment import credibility_prior
+
+    score = credibility_prior(tier)
+    if event_n and event_edge is not None:
+        skill = 0.5 + _clamp(event_edge * 8.0, -0.35, 0.35)   # +4.4% avg edge -> ~0.85
+        w = event_n / (event_n + 8.0)
+        score = (1 - w) * score + w * skill
+    if stated_n:
+        if stated_avg_r is not None:
+            skill = 0.5 + _clamp(stated_avg_r * 0.25, -0.4, 0.4)   # +1.6R avg -> 0.9
+        elif stated_hit is not None:
+            skill = 0.5 + _clamp((stated_hit - 0.5) * 0.8, -0.4, 0.4)
+        else:
+            skill = None
+        if skill is not None:
+            w = (2.0 * stated_n) / (2.0 * stated_n + 8.0)
+            score = (1 - w) * score + w * skill
+    return round(_clamp(score, 0.05, 0.95), 3)

@@ -24,6 +24,7 @@ class RawPost:
     posted_at: datetime
     post_type: str = "original"    # original|retweet|quote|reply
     media_urls: list[str] = field(default_factory=list)
+    metrics: dict = field(default_factory=dict)  # at-ingest engagement: likes/retweets/replies/views
     raw: dict = field(default_factory=dict)
 
 

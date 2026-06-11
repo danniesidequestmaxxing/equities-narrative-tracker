@@ -32,6 +32,23 @@ def _parse_ts(value) -> datetime:
     return datetime.now(timezone.utc)
 
 
+def _metrics(tweet: dict) -> dict:
+    """Engagement counts across the field-name variants twitterapi.io uses."""
+    out: dict[str, int] = {}
+    for key, names in (
+        ("likes", ("likeCount", "favorite_count", "favouriteCount")),
+        ("retweets", ("retweetCount", "retweet_count")),
+        ("replies", ("replyCount", "reply_count")),
+        ("views", ("viewCount", "view_count", "views")),
+    ):
+        for name in names:
+            v = tweet.get(name)
+            if isinstance(v, (int, float)):
+                out[key] = int(v)
+                break
+    return out
+
+
 def _to_rawpost(tweet: dict) -> RawPost | None:
     author = tweet.get("author") or tweet.get("user") or {}
     post_id = tweet.get("id") or tweet.get("id_str") or tweet.get("tweet_id")
@@ -68,6 +85,7 @@ def _to_rawpost(tweet: dict) -> RawPost | None:
         posted_at=_parse_ts(tweet.get("createdAt") or tweet.get("created_at")),
         post_type=post_type,
         media_urls=media,
+        metrics=_metrics(tweet),
         raw=tweet,
     )
 

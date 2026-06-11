@@ -23,8 +23,17 @@ _STANCE_SIGN = {"bullish": 1, "bearish": -1, "neutral": 0, "unclear": 0}
 
 
 def _credibility(tier: str | None) -> float:
-    # Tier prior (HOT/WARM/COLD). The M4 account_scores can refine this later.
+    # Tier prior (HOT/WARM/COLD) — the zero-evidence fallback.
     return credibility_prior(tier or "COLD")
+
+
+def _cred_for(row: dict, scores: dict[int, float] | None) -> float:
+    """Live evidence-weighted score when one exists (M10), else the tier prior."""
+    if scores:
+        live = scores.get(row.get("account_id"))
+        if live is not None:
+            return live
+    return _credibility(row.get("tier"))
 
 
 async def _mention_rows(
@@ -34,7 +43,7 @@ async def _mention_rows(
         select(
             TickerMention.symbol, TickerMention.asset_class, TickerMention.stance,
             TickerMention.stance_confidence, TickerMention.mention_confidence,
-            Post.text, Post.posted_at, Post.platform_post_id,
+            Post.text, Post.posted_at, Post.platform_post_id, Post.account_id,
             Account.handle, Account.tier,
         )
         .join(Post, TickerMention.post_id == Post.id)
@@ -49,12 +58,12 @@ async def _mention_rows(
         return [dict(r._mapping) for r in result]
 
 
-def _sentiment(rows: list[dict]) -> tuple[float, float]:
+def _sentiment(rows: list[dict], scores: dict[int, float] | None = None) -> tuple[float, float]:
     """Credibility-weighted sentiment in (-1, 1) + effective sample size."""
     num = den = q = 0.0
     for r in rows:
         sign = _STANCE_SIGN.get(r["stance"], 0)
-        cred = _credibility(r["tier"])
+        cred = _cred_for(r, scores)
         w = (cred ** _GAMMA) * (r["stance_confidence"] or 0.5)
         num += w * sign
         den += w
@@ -71,13 +80,16 @@ def _tweet_url(handle: str, post_id: str) -> str:
 async def ticker_detail(
     sf: async_sessionmaker[AsyncSession], *, symbol: str, since: datetime, limit: int = 50
 ) -> dict:
+    from . import repo
+
     rows = await _mention_rows(sf, since=since, symbol=symbol)
-    s, n_eff = _sentiment(rows)
+    scores = await repo.latest_account_scores(sf)
+    s, n_eff = _sentiment(rows, scores)
     takes = [
         {
             "handle": r["handle"],
             "tier": r["tier"],
-            "credibility": round(_credibility(r["tier"]), 2),
+            "credibility": round(_cred_for(r, scores), 2),
             "stance": r["stance"],
             "stance_confidence": round(r["stance_confidence"] or 0.0, 2),
             "asset_class": r["asset_class"],
@@ -93,18 +105,21 @@ async def ticker_detail(
 async def hot_tickers(
     sf: async_sessionmaker[AsyncSession], *, since: datetime, limit: int = 20
 ) -> list[dict]:
+    from . import repo
+
     rows = await _mention_rows(sf, since=since)
+    scores = await repo.latest_account_scores(sf)
     by_symbol: dict[str, list[dict]] = defaultdict(list)
     for r in rows:
         by_symbol[r["symbol"]].append(r)
 
     out = []
     for symbol, group in by_symbol.items():
-        s, n_eff = _sentiment(group)
-        # heat = credibility-weighted activity (rewards influential accounts)
-        heat = sum(_credibility(g["tier"]) for g in group)
+        s, n_eff = _sentiment(group, scores)
+        # heat = credibility-weighted activity (rewards accounts proven right)
+        heat = sum(_cred_for(g, scores) for g in group)
         top = sorted(
-            {g["handle"]: _credibility(g["tier"]) for g in group}.items(),
+            {g["handle"]: _cred_for(g, scores) for g in group}.items(),
             key=lambda kv: -kv[1],
         )[:3]
         out.append({

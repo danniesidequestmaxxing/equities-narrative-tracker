@@ -184,6 +184,21 @@ class ExplicitCall(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
 
 
+class PostEngagement(Base):
+    """At-ingest engagement snapshot — the raw tape for future crowdedness /
+    cabal analytics. Captured once per post (~2 min after it's published, so
+    it's an early-velocity baseline, not a final count)."""
+
+    __tablename__ = "post_engagement"
+
+    post_id: Mapped[int] = mapped_column(ForeignKey("posts.id"), primary_key=True)
+    likes: Mapped[int] = mapped_column(default=0)
+    retweets: Mapped[int] = mapped_column(default=0)
+    replies: Mapped[int] = mapped_column(default=0)
+    views: Mapped[int] = mapped_column(default=0)
+    captured_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+
 class CallScanCursor(Base):
     """Posts already scanned for explicit calls (drives the rolling backfill)."""
 

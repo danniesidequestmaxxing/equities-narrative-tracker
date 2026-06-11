@@ -211,10 +211,48 @@ async def run_outcomes(
             closed_at=datetime.fromtimestamp(res["closed_ts"], tz=timezone.utc),
         )
         stated_closed += 1
+    # M10: fold fresh evidence into live credibility — accounts that keep being
+    # right get louder everywhere (sentiment, pulse, recommendations).
+    cred_updated = await refresh_account_credibility(sf, now=now)
     return {
         "computed": computed, "pending": len(pend) - computed,
         "symbols": len(symbols), "stated_closed": stated_closed,
+        "credibility_updated": cred_updated,
     }
+
+
+async def refresh_account_credibility(sf, *, now: datetime, window_days: int = 90) -> int:
+    """Recompute evidence-weighted credibility from the trailing M9 ledger and
+    append point-in-time account_scores rows (read by sentiment + analytics)."""
+    from .db.scoreboard import _aggregate
+    from .score.credibility import evidence_credibility
+
+    since = now - timedelta(days=window_days)
+    rows = await db_outcomes.outcomes_for_accounts(sf, since=since)
+    board = _aggregate(rows, min_n=1)
+    by_handle = {a["handle"]: a for a in board["ranked"] + board["thin"]}
+    stated = await db_calls.stated_stats(sf, since=since)
+
+    updated = 0
+    for acct in await repo.all_accounts(sf):
+        ev = by_handle.get(acct["handle"])
+        st = stated.get(acct["handle"])
+        if ev is None and st is None:
+            continue  # no evidence -> the tier prior stands, write nothing
+        score = evidence_credibility(
+            acct["tier"],
+            event_n=ev["n"] if ev else 0,
+            event_edge=ev["avg_3d"] if ev else None,
+            stated_n=st["closed"] if st else 0,
+            stated_avg_r=st["avg_r"] if st else None,
+            stated_hit=st["hit"] if st else None,
+        )
+        await repo.insert_account_score(
+            sf, account_id=acct["id"], as_of=now, decayed_score=score,
+            sample_size=(ev["n"] if ev else 0) + (st["closed"] if st else 0),
+        )
+        updated += 1
+    return updated
 
 
 async def _adj_bars_from_db(sf, symbol: str, source: str) -> list[dict]:

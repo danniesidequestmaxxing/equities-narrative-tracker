@@ -130,6 +130,43 @@ def build_alert(post: RawPost, mention: Mention, *, watched: bool = False) -> tu
     return mdv2, plain
 
 
+def build_reversal(
+    post: RawPost, mention: Mention, prior: dict, open_call: dict | None
+) -> tuple[str, str]:
+    """🔄 the account flipped direction on a name — often the exit signal."""
+    symbol = mention.symbol
+    link = post_url(post) or tradingview_url(symbol)
+    was_emoji = _STANCE_EMOJI.get(Stance(prior["stance"]), "\U0001f7e1")
+    now_emoji = _STANCE_EMOJI.get(mention.stance, "\U0001f7e1")
+    was_when = prior["posted_at"].strftime("%m-%d") if prior.get("posted_at") else ""
+    snippet = _snippet(post.text)
+    call_line_md = ""
+    call_line_plain = ""
+    if open_call:
+        entry = f"{open_call['entry']:,.2f}" if open_call.get("entry") else "market"
+        t1 = open_call["targets"][0] if open_call.get("targets") else None
+        tgt = f", target {t1:,.2f}" if t1 else ""
+        call_line_md = (
+            f"⚠️ open stated call: *{md(open_call['direction'].upper())}* from "
+            f"`{md_code(entry)}`{md(tgt)} — they may be exiting\n"
+        )
+        call_line_plain = f"OPEN STATED CALL: {open_call['direction'].upper()} from {entry}{tgt}\n"
+    mdv2 = (
+        f"\U0001f504 *Reversal* · `{md_code('$' + symbol)}` · @{md(post.handle or 'source')}\n"
+        f"was {was_emoji} {md(prior['stance'])} \\({md(was_when)}\\) → now {now_emoji} *{md(mention.stance.value)}*\n"
+        f"{call_line_md}"
+        f"“_{md(snippet)}_”\n"
+        f"[\U0001f517 Post]({md_url(link)})\n\n"
+        f"_Derived signal · not financial advice_"
+    )
+    plain = (
+        f"[REVERSAL] ${symbol} @{post.handle or 'source'}: "
+        f"{prior['stance']} ({was_when}) -> {mention.stance.value}\n"
+        f"{call_line_plain}\"{snippet}\"\n{link}"
+    )
+    return mdv2, plain
+
+
 class AlertNotifier:
     """Builds and sends idempotent ticker alerts to the trading channel."""
 
@@ -172,6 +209,18 @@ class AlertNotifier:
         await idempotency.mark_sent(
             self._sf, idempotency_key=key, telegram_message_id=message_id
         )
+        return True
+
+    async def send_reversal(
+        self, post: RawPost, mention: Mention, prior: dict, open_call: dict | None
+    ) -> bool:
+        """🔄 dedicated reversal alert (idempotent per post+symbol)."""
+        key = f"FLIP:{post.platform_user_id}:{post.platform_post_id}:{mention.symbol}"
+        if not await idempotency.claim_send(self._sf, idempotency_key=key, chat_id=self._chat_id):
+            return False
+        mdv2, plain = build_reversal(post, mention, prior, open_call)
+        message_id = await self._safe_send(mdv2, plain)
+        await idempotency.mark_sent(self._sf, idempotency_key=key, telegram_message_id=message_id)
         return True
 
     async def broadcast_call(self, call: TradeCall) -> bool:
