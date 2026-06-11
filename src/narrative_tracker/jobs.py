@@ -9,12 +9,14 @@ all respect the kill switch / pause state.
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
+from .analyze import pulse as pulse_mod
 from .analyze.analyzer import Analyzer
 from .analyze.narratives import assign_narratives
-from .db import recs, repo
+from .analyze.technicals import snapshot_from_bars
+from .db import analytics, recs, repo
 from .enrich.market_data import MarketDataProvider
 from .extract.symbology import classify_symbol
 from .notify.telegram_bot import AlertNotifier
@@ -40,6 +42,89 @@ async def run_digest(
             idempotency_key=f"DIGEST:{date_label}:{cadence_label}", mdv2=mdv2, plain=plain
         )
     return {"broadcast": sent}
+
+
+async def run_pulse(
+    sf, notifier: AlertNotifier,
+    *, now: datetime, hours: float = 8.0, market=None, writer: pulse_mod.PulseWriter | None = None,
+    watchlist_provider=None, broadcast: bool = True, deep_dive_n: int = 3,
+) -> dict:
+    """The 8-hour investor briefing: account recap, hot tickers vs the prior
+    window, early radar, TA + fundamentals deep-dive, narrative brief.
+
+    Built from durable DB state (not the in-memory Analyzer), so it's complete
+    even right after a restart. One broadcast per window (idempotency key is the
+    window bucket), and a window that produced no posts sends nothing.
+    """
+    if await killswitch.is_killed(sf) or await killswitch.get_pause(sf) != killswitch.PAUSE_NONE:
+        return {"skipped": "killed_or_paused"}
+
+    since = now - timedelta(hours=hours)
+    recent = await analytics._mention_rows(sf, since=now - timedelta(hours=2 * hours))
+    window = [r for r in recent if pulse_mod._utc(r["posted_at"]) >= since]
+    if not window:
+        return {"skipped": "no_posts"}
+    prev_counts: dict[str, int] = {}
+    for r in recent:
+        if pulse_mod._utc(r["posted_at"]) < since:
+            prev_counts[r["symbol"]] = prev_counts.get(r["symbol"], 0) + 1
+
+    week = await analytics._mention_rows(sf, since=now - timedelta(days=7))
+    prior_week = [r for r in week if pulse_mod._utc(r["posted_at"]) < since]
+
+    hot = await analytics.hot_tickers(sf, since=since, limit=8)
+    for t in hot:
+        prev = prev_counts.get(t["symbol"], 0)
+        t["delta"] = "new" if prev == 0 else "up" if t["mentions"] > prev else "down" if t["mentions"] < prev else "flat"
+
+    early = pulse_mod.early_radar(window, prior_week, window_hours=hours)
+    recap = pulse_mod.account_recap(window)
+
+    # TA + fundamentals on the top chartable (equity) names.
+    deep_dives: list[dict] = []
+    if market is not None:
+        for t in hot:
+            if t["asset_class"] != "equity" or len(deep_dives) >= deep_dive_n:
+                continue
+            try:
+                ta = snapshot_from_bars(await market.fetch_bars(t["symbol"], days=400, adjusted=True))
+                if ta is None:
+                    continue
+                overview = await market.fetch_overview(t["symbol"])
+                deep_dives.append({"symbol": t["symbol"], "ta": ta, **overview})
+            except Exception as exc:  # noqa: BLE001 - one symbol must not kill the pulse
+                log.warning("pulse deep-dive failed for %s: %s", t["symbol"], exc)
+
+    brief = None
+    if writer is not None:
+        try:
+            brief = await writer(pulse_mod.build_writer_context(window, hot, early, hours=hours))
+        except Exception as exc:  # noqa: BLE001 - degrade to the seed-theme fallback
+            log.warning("pulse LLM writer failed (%s); using fallback narratives", exc)
+
+    active = list(await watchlist_provider()) if watchlist_provider else []
+    posted_handles = {r["handle"] for r in window}
+    quiet = sorted(h for h in active if h not in posted_handles)
+
+    bucket = f"{now:%Y-%m-%d}:{int(now.hour // max(1, int(hours)))}"
+    mdv2, plain = pulse_mod.build_pulse(
+        window_label=f"{hours:g}h",
+        date_label=f"{now:%Y-%m-%d %H:%M} UTC",
+        posts_count=len({r["platform_post_id"] for r in window}),
+        accounts_count=len(posted_handles),
+        tickers_count=len({r["symbol"] for r in window}),
+        hot=hot, brief=brief, narratives=pulse_mod.fallback_narratives(window),
+        early=early, deep_dives=deep_dives, recap=recap, quiet=quiet,
+        market_hint=market is None, llm_hint=writer is None,
+    )
+    sent = False
+    if broadcast:
+        sent = await notifier.broadcast_text(idempotency_key=f"PULSE:{bucket}", mdv2=mdv2, plain=plain)
+    return {
+        "broadcast": sent, "posts": len({r["platform_post_id"] for r in window}),
+        "tickers": len({r["symbol"] for r in window}), "deep_dives": len(deep_dives),
+        "llm": brief is not None, "early": [e["symbol"] for e in early],
+    }
 
 
 def _recommend_inputs(analyzer: Analyzer, now_ts: float, config: RiskConfig) -> list[dict]:

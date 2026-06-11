@@ -61,3 +61,40 @@ def support_resistance(highs: list[float], lows: list[float], lookback: int = 20
     window_h = highs[-lookback:]
     window_l = lows[-lookback:]
     return (min(window_l), max(window_h))
+
+
+def snapshot_from_bars(bars: list[dict]) -> dict | None:
+    """One-glance TA snapshot from ascending daily OHLCV bars (``o/h/l/c/v`` keys).
+
+    Returns None when there's too little history to say anything (<30 bars).
+    """
+    if len(bars) < 30:
+        return None
+    closes = [b["c"] for b in bars]
+    highs = [b["h"] for b in bars]
+    lows = [b["l"] for b in bars]
+    vols = [float(b.get("v") or 0.0) for b in bars]
+    price = closes[-1]
+
+    def chg(n: int) -> float | None:
+        if len(closes) <= n or not closes[-1 - n]:
+            return None
+        return round((price / closes[-1 - n] - 1) * 100, 1)
+
+    vol_base = sma(vols[:-1], 20)
+    hi_52w = max(highs[-252:])
+    lo_52w = min(lows[-252:])
+    sup, res = support_resistance(highs, lows, 20)
+    return {
+        "price": price,
+        "chg_1d": chg(1),
+        "chg_5d": chg(5),
+        "chg_20d": chg(20),
+        "rsi": rsi(closes),
+        "trend": trend(closes),
+        "vol_ratio": round(vols[-1] / vol_base, 1) if vol_base else None,
+        "off_high_pct": round((1 - price / hi_52w) * 100, 1) if hi_52w else None,
+        "off_low_pct": round((price / lo_52w - 1) * 100, 1) if lo_52w else None,
+        "support": sup,
+        "resistance": res,
+    }

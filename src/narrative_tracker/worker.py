@@ -266,6 +266,7 @@ async def main() -> None:  # pragma: no cover - prod entrypoint
     # Digest needs no market data, so it always runs. Recommend + scoring require a
     # real MarketDataProvider (Polygon) + bars feed — wired at go-live; until then
     # the service runs alerts + analyzer + digests.
+    market = None  # set below when Polygon is configured; the pulse degrades without it
     scheduled = [
         ScheduledJob(
             "digest-daily", 86400.0,
@@ -306,6 +307,23 @@ async def main() -> None:  # pragma: no cover - prod entrypoint
         scheduled.append(ScheduledJob("refresh-score", 86400.0, _refresh_and_score))
     else:
         log.warning("market data provider not configured; recommend + scoring disabled")
+
+    # The recurring investor briefing (every NT_PULSE_INTERVAL_HOURS; 0 disables).
+    # Degrades gracefully: no Polygon -> no TA section; no LLM -> seed-theme narratives.
+    if settings.pulse_interval_hours > 0:  # pragma: no cover
+        from .analyze.pulse import build_pulse_writer
+
+        pulse_writer = build_pulse_writer(settings.llm_model)
+        scheduled.append(ScheduledJob(
+            "pulse", settings.pulse_interval_hours * 3600.0,
+            lambda now: cadence.run_pulse(
+                session_factory, notifier, now=now, hours=settings.pulse_interval_hours,
+                market=market, writer=pulse_writer,
+                watchlist_provider=lambda: repo.active_handles(session_factory),
+            ),
+        ))
+        log.info("pulse briefing every %sh (llm=%s, market=%s)",
+                 settings.pulse_interval_hours, bool(pulse_writer), market is not None)
 
     worker = Worker(
         provider=provider,

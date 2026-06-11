@@ -66,17 +66,30 @@ class PolygonMarketData:
             session_open=(True if asset_class == "crypto" else _equity_session_open(now)),
         )
 
-    async def fetch_bars(self, symbol: str, *, days: int = 400) -> list[dict]:
+    async def fetch_bars(self, symbol: str, *, days: int = 400, adjusted: bool = False) -> list[dict]:
+        # Unadjusted by default (the scorer's contract); the pulse TA passes
+        # adjusted=True so indicators aren't distorted by splits.
         now = self._now()
         to_d, from_d = now.date(), now.date() - timedelta(days=days)
         data = await self._fetch(
             f"/v2/aggs/ticker/{symbol}/range/1/day/{from_d}/{to_d}",
-            {"adjusted": "false", "limit": 50000},
+            {"adjusted": "true" if adjusted else "false", "limit": 50000},
         )
         return [
             {"ts": int(r["t"] // 1000), "o": r["o"], "h": r["h"], "l": r["l"], "c": r["c"], "v": r.get("v", 0.0)}
             for r in (data.get("results") or [])
         ]
+
+    async def fetch_overview(self, symbol: str) -> dict:
+        """Fundamentals-at-a-glance from the ticker reference endpoint."""
+        data = await self._fetch(f"/v3/reference/tickers/{symbol}", {})
+        r = data.get("results") or {}
+        return {
+            "name": r.get("name") or symbol,
+            "market_cap": r.get("market_cap") or 0.0,
+            "sector": r.get("sic_description") or "",
+            "exchange": r.get("primary_exchange") or "",
+        }
 
     async def fetch_adjustments(self, symbol: str) -> list[dict]:
         out: list[dict] = []
