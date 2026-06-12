@@ -49,6 +49,12 @@ class Settings(BaseSettings):
     # tickers, early radar, TA + fundamentals, narratives). 0 -> disabled.
     pulse_interval_hours: float = 8.0
 
+    # M15 conviction routing: alerts below `silent` arrive without a phone
+    # buzz (still in the channel + ledger); below `min` no alert is sent at
+    # all (mention still recorded and graded). 0 disables each behavior.
+    alert_silent_below_conviction: float = 0.5
+    alert_min_conviction: float = 0.0
+
     # LLM (stance / extraction). Empty -> deterministic rule-based fallback only.
     llm_model: str | None = None          # e.g. "openai/gpt-5.2", "anthropic/claude-opus-4-8"
     llm_budget_usd: float = 100.0

@@ -31,6 +31,8 @@ class StanceResult:
     stance: Stance
     negation_flag: bool
     stance_confidence: float
+    conviction: float = 0.5      # M15: 0=musing, 1=stated position with size
+    is_position: bool = False    # author states they hold / are entering
 
 
 class StanceClassifier(Protocol):
@@ -52,6 +54,17 @@ _NEGATORS = {
     "not", "no", "never", "isn't", "aint", "ain't", "wouldn't", "won't",
     "don't", "cant", "can't", "dont", "wont",
 }
+# M15 conviction lexicons (rule-based fallback): action beats observation.
+_COMMITTED = {
+    "bought", "buying", "added", "adding", "loaded", "loading", "long",
+    "short", "shorted", "sold", "selling", "position", "sizing", "size",
+    "entry", "stop", "target", "conviction", "allocated",
+}
+_HEDGING = {
+    "might", "could", "maybe", "watching", "eyeing", "radar", "interesting",
+    "curious", "thinking", "perhaps", "possibly", "if",
+}
+
 _SARCASM = (
     "imagine being long", "imagine buying", "what could go wrong",
     "great job buying", "buying the top", "totally not financial advice",
@@ -72,8 +85,13 @@ class RuleBasedStanceClassifier:
 
     async def classify(self, text: str, symbol: str | None = None) -> StanceResult:
         low = (text or "").lower()
+        tokens_all = set(re.findall(r"[a-z']+", low))
+        committed = len(tokens_all & _COMMITTED)
+        hedged = len(tokens_all & _HEDGING)
+        conviction = max(0.2, min(0.9, 0.5 + 0.15 * committed - 0.15 * hedged))
+        is_position = bool(tokens_all & {"bought", "added", "adding", "loaded", "long", "short", "shorted", "sold"})
         if low.strip().endswith("?"):
-            return StanceResult(Stance.NEUTRAL, False, 0.8)
+            return StanceResult(Stance.NEUTRAL, False, 0.8, 0.25, False)
 
         tokens = set(re.findall(r"[a-z']+", low))
         bull = len(tokens & _BULLISH) + low.count("\U0001f680")  # 🚀
@@ -89,13 +107,13 @@ class RuleBasedStanceClassifier:
                 base, strength = Stance.BEARISH, 0.5
             else:
                 stance = Stance.UNCLEAR if sarcasm else Stance.NEUTRAL
-                return StanceResult(stance, has_neg, 0.4 if sarcasm else 0.55)
+                return StanceResult(stance, has_neg, 0.4 if sarcasm else 0.55, conviction, is_position)
         elif bull > bear:
             base, strength = Stance.BULLISH, min(1.0, 0.55 + 0.15 * (bull - bear))
         elif bear > bull:
             base, strength = Stance.BEARISH, min(1.0, 0.55 + 0.15 * (bear - bull))
         else:
-            return StanceResult(Stance.UNCLEAR, has_neg, 0.4)
+            return StanceResult(Stance.UNCLEAR, has_neg, 0.4, conviction, is_position)
 
         neg_flag = False
         if has_neg and base in (Stance.BULLISH, Stance.BEARISH):
@@ -105,7 +123,7 @@ class RuleBasedStanceClassifier:
             base = _flip(base)
             strength = min(strength, 0.65)
 
-        return StanceResult(base, neg_flag, round(strength, 2))
+        return StanceResult(base, neg_flag, round(strength, 2), conviction, is_position)
 
 
 STANCE_SYSTEM_PROMPT = """\
@@ -122,6 +140,11 @@ Rules:
    "ripping", "parabolic", "ATH" express a bullish view even without the word "buy".
 4. Pure questions or news with no opinion => neutral.
 5. If you genuinely cannot tell => unclear. Do not guess high confidence.
+6. CONVICTION (separate from stance confidence): how COMMITTED is the author?
+   0.8-1.0 = states a position or action now ("added", "loaded", size, levels);
+   ~0.5 = clear directional opinion but no stated action;
+   0.0-0.3 = musing, "watching", hypotheticals, engagement bait.
+   is_position=true only when the author states they hold or are entering/exiting.
 Return calibrated confidence in [0,1]."""
 
 
@@ -131,6 +154,8 @@ class StanceLabel(BaseModel):
     stance: Stance
     negation: bool = False
     confidence: float = Field(ge=0, le=1)
+    conviction: float = Field(default=0.5, ge=0, le=1)
+    is_position: bool = False
 
 
 class LlmStanceClassifier:
@@ -146,6 +171,8 @@ class LlmStanceClassifier:
             stance=label.stance,
             negation_flag=bool(label.negation),
             stance_confidence=float(label.confidence),
+            conviction=float(label.conviction),
+            is_position=bool(label.is_position),
         )
 
 

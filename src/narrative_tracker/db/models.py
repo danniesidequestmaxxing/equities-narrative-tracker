@@ -184,6 +184,17 @@ class ExplicitCall(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
 
 
+class PostConviction(Base):
+    """M15: the author's commitment level in this post — 0 = musing/watching,
+    1 = stated position with size and levels. Weighs sentiment + routes alerts."""
+
+    __tablename__ = "post_conviction"
+
+    post_id: Mapped[int] = mapped_column(ForeignKey("posts.id"), primary_key=True)
+    conviction: Mapped[float] = mapped_column(Float, default=0.5)
+    is_position: Mapped[bool] = mapped_column(Boolean, default=False)
+
+
 class PostEngagement(Base):
     """At-ingest engagement snapshot — the raw tape for future crowdedness /
     cabal analytics. Captured once per post (~2 min after it's published, so

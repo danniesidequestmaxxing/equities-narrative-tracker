@@ -143,6 +143,22 @@ async def get_account_id(
         )
 
 
+async def save_post_conviction(
+    session_factory: async_sessionmaker[AsyncSession], *, post_id: int,
+    conviction: float, is_position: bool,
+) -> None:
+    """M15: persist the author's commitment level (idempotent on post_id)."""
+    from .models import PostConviction
+
+    async with session_factory() as session:
+        if await session.get(PostConviction, post_id) is not None:
+            return
+        session.add(PostConviction(
+            post_id=post_id, conviction=round(float(conviction), 3), is_position=is_position
+        ))
+        await session.commit()
+
+
 async def save_engagement(
     session_factory: async_sessionmaker[AsyncSession], *, post_id: int, metrics: dict
 ) -> None:

@@ -106,6 +106,13 @@ async def process_post(
         # M10: at-ingest engagement snapshot — raw tape for crowdedness analytics.
         await repo.save_engagement(session_factory, post_id=post_id, metrics=post.metrics)
 
+    if is_new and mentions:
+        # M15: persist the author's commitment level (post-level, from stance read).
+        await repo.save_post_conviction(
+            session_factory, post_id=post_id,
+            conviction=mentions[0].conviction, is_position=mentions[0].is_position,
+        )
+
     alerts_sent = 0
     for mention in mentions:
         if mention.mention_confidence < min_confidence:
@@ -308,6 +315,8 @@ async def main() -> None:  # pragma: no cover - prod entrypoint
         bot=bot,
         session_factory=session_factory,
         trading_chat_id=settings.telegram_trading_chat_id,  # type: ignore[arg-type]
+        silent_below_conviction=settings.alert_silent_below_conviction,
+        min_conviction=settings.alert_min_conviction,
     )
     # M12: ops messages go to the ops chat when configured, else the channel.
     ops_notifier = notifier

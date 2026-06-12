@@ -127,13 +127,14 @@ def build_alert(
     type_tag = _POST_TYPE_TAG.get(post.post_type, "")
     snippet = _snippet(post.text)
     bell = "\U0001f514 " if watched else ""  # 🔔
+    conv = " \U0001f4aa" if mention.conviction >= 0.75 else (" \U0001f4a4" if mention.conviction < 0.4 else "")  # 💪 / 💤
     stat_md = stat_plain = ""
     if author_stat:
         stat_txt = f"cred {author_stat['score']:.2f} · evidence n={author_stat['n']}"
         stat_md = f"\U0001f4ca {md(stat_txt)}\n"
         stat_plain = f"[{stat_txt}]\n"
     mdv2 = (
-        f"{bell}⚡ *{md(header)}* · {emoji} {md(mention.stance.value)} · {md(asset)}\n"
+        f"{bell}⚡ *{md(header)}* · {emoji} {md(mention.stance.value)}{conv} · {md(asset)}\n"
         f"[{md('@' + (post.handle or 'source'))}]({md_url(link)}) · "
         f"{md(type_tag)}{md(post.posted_at.strftime('%H:%M ET'))}\n"
         f"{stat_md}"
@@ -199,10 +200,14 @@ class AlertNotifier:
         bot: BotProtocol,
         session_factory: async_sessionmaker[AsyncSession],
         trading_chat_id: int,
+        silent_below_conviction: float = 0.0,
+        min_conviction: float = 0.0,
     ) -> None:
         self._bot = bot
         self._sf = session_factory
         self._chat_id = trading_chat_id
+        self._silent_below = silent_below_conviction
+        self._min_conviction = min_conviction
 
     @staticmethod
     def _mention_key(post: RawPost, mention: Mention) -> str:
@@ -216,7 +221,13 @@ class AlertNotifier:
 
     async def send_alert(self, post: RawPost, mention: Mention) -> bool:
         """Send one alert for a (post, ticker). Returns ``True`` if a message was
-        actually sent, ``False`` if it was a deduped no-op."""
+        actually sent, ``False`` if it was a deduped no-op.
+
+        M15 conviction routing: below ``min_conviction`` no alert at all (the
+        mention is still stored and graded); below ``silent_below_conviction``
+        the alert arrives without a notification buzz."""
+        if self._min_conviction > 0 and mention.conviction < self._min_conviction:
+            return False
         key = self._mention_key(post, mention)
         # Claim BEFORE sending (INV-1): if already claimed, do not send.
         claimed = await idempotency.claim_send(
@@ -232,7 +243,8 @@ class AlertNotifier:
         if account_id is not None:
             author_stat = await repo.latest_account_stat(self._sf, account_id=account_id)
         mdv2, plain = build_alert(post, mention, watched=watched, author_stat=author_stat)
-        message_id = await self._safe_send(mdv2, plain)
+        silent = self._silent_below > 0 and mention.conviction < self._silent_below
+        message_id = await self._safe_send(mdv2, plain, silent=silent)
         await idempotency.mark_sent(
             self._sf, idempotency_key=key, telegram_message_id=message_id
         )
@@ -277,17 +289,17 @@ class AlertNotifier:
         )
         return True
 
-    async def _safe_send(self, text_mdv2: str, plain_fallback: str) -> int:
+    async def _safe_send(self, text_mdv2: str, plain_fallback: str, *, silent: bool = False) -> int:
         """Send MarkdownV2; on a parse error, resend as plain text so a template
         bug never drops an alert. Returns the Telegram ``message_id``."""
         try:
             result = await self._bot.send_message(
-                self._chat_id, text_mdv2, parse_mode="MarkdownV2"
+                self._chat_id, text_mdv2, parse_mode="MarkdownV2", disable_notification=silent
             )
         except Exception as exc:  # noqa: BLE001
             if "can't parse entities" in str(exc).lower():
                 log.error("MarkdownV2 parse failure; sending plain text")
-                result = await self._bot.send_message(self._chat_id, plain_fallback)
+                result = await self._bot.send_message(self._chat_id, plain_fallback, disable_notification=silent)
             else:
                 raise
         return int(getattr(result, "message_id", 0) or 0)

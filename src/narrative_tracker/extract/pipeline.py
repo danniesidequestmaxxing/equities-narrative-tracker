@@ -175,6 +175,8 @@ class ExtractionPipeline:
         # vision mentions keep any stance they carried).
         result = await self._stance.classify(text)
         for m in mentions:
+            m.conviction = result.conviction  # M15: post-level commitment
+            m.is_position = result.is_position
             if m.resolution_method is ResolutionMethod.VISION_OCR:
                 continue
             m.stance = result.stance

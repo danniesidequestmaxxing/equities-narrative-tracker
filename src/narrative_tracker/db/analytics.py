@@ -39,15 +39,18 @@ def _cred_for(row: dict, scores: dict[int, float] | None) -> float:
 async def _mention_rows(
     sf: async_sessionmaker[AsyncSession], *, since: datetime, symbol: str | None = None
 ) -> list[dict]:
+    from .models import PostConviction
+
     stmt = (
         select(
             TickerMention.symbol, TickerMention.asset_class, TickerMention.stance,
             TickerMention.stance_confidence, TickerMention.mention_confidence,
             Post.text, Post.posted_at, Post.platform_post_id, Post.account_id,
-            Account.handle, Account.tier,
+            Account.handle, Account.tier, PostConviction.conviction,
         )
         .join(Post, TickerMention.post_id == Post.id)
         .join(Account, Post.account_id == Account.id)
+        .outerjoin(PostConviction, PostConviction.post_id == Post.id)
         .where(Post.posted_at >= since)
         .order_by(Post.posted_at.desc())
     )
@@ -58,13 +61,21 @@ async def _mention_rows(
         return [dict(r._mapping) for r in result]
 
 
+def _conv_factor(row: dict) -> float:
+    """M15: conviction multiplies weight — a stated position (1.0) counts 3x a
+    musing (0.2-ish); unknown conviction is neutral (factor 1.0)."""
+    c = row.get("conviction")
+    return 0.5 + float(c) if c is not None else 1.0
+
+
 def _sentiment(rows: list[dict], scores: dict[int, float] | None = None) -> tuple[float, float]:
-    """Credibility-weighted sentiment in (-1, 1) + effective sample size."""
+    """Credibility- and conviction-weighted sentiment in (-1, 1) + effective
+    sample size."""
     num = den = q = 0.0
     for r in rows:
         sign = _STANCE_SIGN.get(r["stance"], 0)
         cred = _cred_for(r, scores)
-        w = (cred ** _GAMMA) * (r["stance_confidence"] or 0.5)
+        w = (cred ** _GAMMA) * (r["stance_confidence"] or 0.5) * _conv_factor(r)
         num += w * sign
         den += w
         q += w * w
@@ -113,7 +124,7 @@ def _raw_lean(rows: list[dict], scores: dict[int, float] | None) -> float | None
     num = den = 0.0
     for r in rows:
         sign = _STANCE_SIGN.get(r["stance"], 0)
-        w = (_cred_for(r, scores) ** _GAMMA) * (r["stance_confidence"] or 0.5)
+        w = (_cred_for(r, scores) ** _GAMMA) * (r["stance_confidence"] or 0.5) * _conv_factor(r)
         num += w * sign
         den += w
     return round(num / den, 3) if den > 0 else None

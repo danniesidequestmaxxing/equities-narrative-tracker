@@ -66,6 +66,9 @@ class Mention(BaseModel):
     stance: Stance = Stance.NEUTRAL
     negation_flag: bool = False
     mention_confidence: float = Field(default=1.0, ge=0, le=1)
+    # M15: author's commitment level (post-level; not persisted on the mention row)
+    conviction: float = Field(default=0.5, ge=0, le=1)
+    is_position: bool = False
     stance_confidence: float = Field(default=0.0, ge=0, le=1)
     option_detail: OptionDetail | None = None
 
