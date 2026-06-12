@@ -1,7 +1,7 @@
 """Extraction pipeline (M1) — the cascade orchestrator.
 
     options  →  cashtags (+ collision gate)  →  entity-link  →  relevance gate
-    →  vision  →  stance  →  dedupe
+    →  LLM inference (cashtag-less)  →  vision  →  stance  →  dedupe
 
 Returns ``list[Mention]`` with both confidences populated. The stance classifier,
 relevance gate and vision extractor are injected (rule-based / none / fake by
@@ -56,10 +56,12 @@ class ExtractionPipeline:
         stance: StanceClassifier | None = None,
         vision: VisionExtractor | None = None,
         relevance: RelevanceGate | None = None,
+        inferrer=None,  # M14: MentionInferrer for cashtag-less ticker talk
     ) -> None:
         self._stance = stance or RuleBasedStanceClassifier()
         self._vision = vision
         self._relevance = relevance
+        self._inferrer = inferrer
 
     async def extract(
         self,
@@ -142,6 +144,24 @@ class ExtractionPipeline:
                 seen = {m.symbol for m in mentions}
             except Exception as exc:  # noqa: BLE001 - degrade, never break extraction
                 log.warning("relevance gate failed (%s); keeping all mentions", exc)
+
+        # S2c — M14: cashtag-less inference. Only when the deterministic passes
+        # found nothing and there's enough text to mean something ("Micron is
+        # going to rip" has no cashtag but is clearly about MU). Relevance is
+        # baked into the prompt; fail-open like every LLM stage.
+        if self._inferrer is not None and not mentions and len(text.split()) >= 4:
+            try:
+                from .mentions_llm import to_mentions
+
+                inferred = to_mentions(await self._inferrer(text), source_post_id=source_post_id)
+                for m in inferred:
+                    if m.symbol not in seen:
+                        mentions.append(m)
+                        seen.add(m.symbol)
+                if inferred:
+                    log.info("inferred %s from cashtag-less post", [m.symbol for m in inferred])
+            except Exception as exc:  # noqa: BLE001 - degrade, never break extraction
+                log.warning("mention inference failed (%s); skipping", exc)
 
         # S4 — vision, only for image posts that text couldn't resolve.
         if self._vision and media_urls and not mentions:

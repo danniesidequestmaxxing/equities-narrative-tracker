@@ -21,7 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from ..db import idempotency, repo
 from ..ingest.provider import RawPost
 from ..schemas.call import Direction, TradeCall
-from ..schemas.mention import Mention, OptionDetail, Stance
+from ..schemas.mention import Mention, OptionDetail, ResolutionMethod, Stance
 from .escaping import md, md_code, md_url
 
 log = logging.getLogger(__name__)
@@ -115,6 +115,12 @@ def build_alert(
     tv = tradingview_url(symbol)
     link = post_url(post) or tv
     asset = mention.asset_class.value
+    # M14: inferred (no cashtag in the post) and vision (read off an image)
+    # mentions say so — the reader deserves to know how sure the machine is.
+    if mention.resolution_method is ResolutionMethod.LLM_INFERENCE:
+        asset += " · inferred"
+    elif mention.resolution_method is ResolutionMethod.VISION_OCR:
+        asset += " · from image"
     emoji = _STANCE_EMOJI.get(mention.stance, "\U0001f7e1")  # 🟡 default
     opt = f" {_option_str(mention.option_detail)}" if mention.option_detail else ""
     header = f"${symbol}{opt}"

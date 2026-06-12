@@ -338,10 +338,13 @@ async def main() -> None:  # pragma: no cover - prod entrypoint
     if vision is not None:
         vision = CachingBudgetedVision(vision, budget=CountBudget(500))
 
+    from .extract.mentions_llm import build_mention_inferrer
+
     pipeline = ExtractionPipeline(
         stance=build_stance_classifier(model=settings.llm_model, budget=llm_budget),
         relevance=build_relevance_gate(model=settings.llm_model, budget=llm_budget),
         vision=vision,
+        inferrer=build_mention_inferrer(settings.llm_model, llm_budget),
     )
     analyzer = Analyzer()
 
